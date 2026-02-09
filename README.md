@@ -80,6 +80,8 @@ uv run python src/spea_lab_iot/main.py
 uv run ruff check .
 ```
 
+For the MQTT sensor simulator and subscriber, see [docs/MQTT_DEMO.md](docs/MQTT_DEMO.md).
+
 ## Development
 
 ### Run the application
