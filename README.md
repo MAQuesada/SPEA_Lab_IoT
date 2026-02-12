@@ -80,7 +80,8 @@ uv run python src/spea_lab_iot/main.py
 uv run ruff check .
 ```
 
-For the MQTT sensor simulator and subscriber, see [docs/MQTT_DEMO.md](docs/MQTT_DEMO.md).
+- **MQTT demo** (sensor + subscriber, no enrollment): [docs/MQTT_DEMO.md](docs/MQTT_DEMO.md)
+- **R1: Enrollable devices + platform** (pairing, keypad/screen, iot/feed): [docs/R1_DEVICE_PLATFORM.md](docs/R1_DEVICE_PLATFORM.md)
 
 ## Development
 
@@ -102,6 +103,19 @@ uv run python src/spea_lab_iot/main.py
 uv run ruff check .
 uv run ruff format .
 ```
+
+## Environment variables
+
+Scripts load variables from a `.env` file (copy `example.env` to `.env` and adjust). Each entry-point script calls `load_dotenv()` at startup so values are available before config is read.
+
+| Variable | Used by | Description |
+|----------|---------|-------------|
+| `MQTT_BROKER_HOST` | All | Broker host (default: `public.cloud.shiftr.io`) |
+| `MQTT_BROKER_PORT` | All | Broker port (default: `1883`) |
+| `MQTT_USER` | All | MQTT username (default: `public`) |
+| `MQTT_PASSWORD` | All | MQTT password (default: `public`) |
+| `PLATFORM_DEFAULT_PIN` | Platform | Default PIN for keypad devices; key `"default"` cannot be removed |
+| `PLATFORM_LOG` | Platform | Set to `1` or `true` to enable log mode on startup |
 
 ## Python version
 
