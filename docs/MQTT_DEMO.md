@@ -22,7 +22,13 @@ uv sync
 In a terminal, start the subscriber so it is ready to receive messages:
 
 ```bash
-uv run python scripts/mqtt_subscriber.py
+uv run python -m mqtt_demo.mqtt_subscriber
+```
+
+Or run the script directly:
+
+```bash
+uv run python src/mqtt_demo/mqtt_subscriber.py
 ```
 
 Leave this running. You should see:
@@ -37,7 +43,13 @@ Leave this running. You should see:
 In a **second** terminal, start the sensor simulator:
 
 ```bash
-uv run python scripts/mqtt_sensor.py
+uv run python -m mqtt_demo.mqtt_sensor
+```
+
+Or run the script directly:
+
+```bash
+uv run python src/mqtt_demo/mqtt_sensor.py
 ```
 
 The sensor will publish a JSON payload every 5 seconds with `temperature` (°C) and `humidity` (%). The subscriber terminal will print each received message.
