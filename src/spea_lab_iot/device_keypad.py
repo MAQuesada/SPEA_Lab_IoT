@@ -12,7 +12,7 @@ SENSOR_ID = "sensor-keypad-01"
 
 
 def main() -> None:
-    run_device(sensor_id=SENSOR_ID, ui_mode="keypad", pin=None)
+    run_device(sensor_id=SENSOR_ID, ui_mode="keypad", pin=None, alg=None)
 
 
 if __name__ == "__main__":
