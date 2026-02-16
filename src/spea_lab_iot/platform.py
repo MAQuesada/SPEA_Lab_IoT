@@ -140,7 +140,7 @@ def run_platform(log_enabled: bool = False) -> None:
             return
         else:
             allowed_pin = allowed_dict.get("pin")
-            if pin != platform_pin and pin != allowed_p:
+            if pin != platform_pin and pin != allowed_pin:
                 _log(
                     log_mode[0], f"Pairing rejected for device_id={device_id!r} (wrong PIN)"
                 )
