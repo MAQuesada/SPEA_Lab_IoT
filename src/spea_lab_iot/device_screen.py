@@ -13,11 +13,14 @@ load_dotenv()
 from spea_lab_iot.device import run_device
 
 SENSOR_ID = "sensor-screen-01"
+POS_ALG = ['AES-CBC', 'AES-GCM']
 
 
 def main() -> None:
     pin = str(random.randint(100000, 999999))
-    run_device(sensor_id=SENSOR_ID, ui_mode="screen", pin=pin)
+    alea_pos  = random.randint(0,len(POS_ALG))
+    alg = POS_ALG[alea_pos]
+    run_device(sensor_id=SENSOR_ID, ui_mode="screen", pin=pin, alg=alg)
 
 
 if __name__ == "__main__":

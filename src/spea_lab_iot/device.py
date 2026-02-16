@@ -48,6 +48,7 @@ ENROLL_WAIT_TIMEOUT_SEC = 30
 # Choose mode of Cryptography (maybe can be determinated by user using the platform)
 # ALGORITHM = 'AES-CBC'
 ALGORITHM = 'AES-GCM'
+POS_ALG = ['AES-CBC', 'AES-GCM']
 
 #==================================================================================================
 # TEMPORAL KEY -> WHEN AUTHENTICATED METHODS will be IMPLEMENTED, THEN THIS IS GOING TO BE ERASED
@@ -107,7 +108,8 @@ def encrypt_aes_cbc_hmac(enc_key: bytes, mac_key: bytes, plaintext: bytes):
 def run_device(
     sensor_id: str,
     ui_mode: str,
-    pin: str | None = None,
+    pin: str,
+    alg: str | None = None,
 ) -> None:
     """
     Run device: pair with platform then publish temperature/humidity.
@@ -115,11 +117,16 @@ def run_device(
     ui_mode: "keypad" (user enters platform PIN) or "screen" (device shows ID and PIN, retries until enrolled).
     pin: for keypad, pass None and user will be prompted; for screen, pass the PIN (e.g. from env in device_screen.py).
     """
-    if ui_mode == "keypad" and pin is None:
+    if ui_mode == "keypad" and pin is None and alg is None:
         pin = input("Enter platform code: ").strip()
+        alg = input("Enter encrypted algorithm (AES-CBC or AES-GCM): ").strip()
         if not pin:
             print("PIN required.", file=sys.stderr)
             sys.exit(1)
+        if not alg or alg not in POS_ALG:
+            print("Algorithm required and it should be: " + POS_ALG, file=sys.stderr)
+            sys.exit(1)
+        
     elif ui_mode == "screen":
         if not pin:
             print(
@@ -127,8 +134,14 @@ def run_device(
                 file=sys.stderr,
             )
             sys.exit(1)
+        if not alg:
+            print(
+                "Screen device requires an encrypted algorithm",
+                file=sys.stderr
+            )
         print(f"Device ID: {sensor_id}")
         print(f"PIN: {pin}")
+        print(f"Encrypted algorithm: {alg}")
         print("Attempting pairing until enrolled...")
     else:
         print("ui_mode must be 'keypad' or 'screen'.", file=sys.stderr)
@@ -175,7 +188,7 @@ def run_device(
     client.loop_start()
 
     def send_pairing() -> None:
-        payload = json.dumps({"action": "pairing", "device_id": sensor_id, "pin": pin})
+        payload = json.dumps({"action": "pairing", "device_id": sensor_id, "pin": pin, "alg": alg})
         client.publish(TOPIC_ENROLL, payload, qos=1)
 
     # Pairing phase
@@ -221,17 +234,16 @@ def run_device(
         aad = (sensor_id + "|" + timestamp).encode()
         
         #=================MOCKS PROVISIONALES =====================
-        algorithm = ALGORITHM
         key = derive_key_from_pin(pin)
         session_key = key[:16]
         auth_key = key[16:]
         key_id = 1 
         #============================================================================================
         
-        if algorithm == "AES-CBC":
+        if alg == "AES-CBC":
             # AE
             nonce, ciphertext, tag = encrypt_aes_cbc_hmac(session_key, auth_key, plaintext)
-        elif algorithm == "AES-GCM":
+        elif alg == "AES-GCM":
             # AEAD
             nonce, ciphertext, tag = encrypt_aead_aes_gcm(session_key, plaintext, aad)
         else:
@@ -245,7 +257,7 @@ def run_device(
                 "nonce": base64.b64encode(nonce).decode(),
                 "ciphertext": base64.b64encode(ciphertext).decode(),
                 "tag": base64.b64encode(tag).decode(),
-                "alg": algorithm,
+                "alg": alg,
                 "ts": timestamp,
             }
 
