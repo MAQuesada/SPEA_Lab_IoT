@@ -29,7 +29,7 @@ from spea_lab_iot.config import (
 from Crypto.Random import get_random_bytes
 from Crypto.Cipher import AES
 from Crypto.Hash import HMAC, SHA256
-from Crypto.Util.Padding import pad,unpad
+from Crypto.Util.Padding import pad, unpad
 from Crypto.Protocol.KDF import PBKDF2
 
 # Sensor simulation (baseline + deviation)
@@ -47,10 +47,11 @@ ENROLL_WAIT_TIMEOUT_SEC = 30
 
 # Choose mode of Cryptography (maybe can be determinated by user using the platform)
 # ALGORITHM = 'AES-CBC'
-ALGORITHM = 'AES-GCM'
-POS_ALG = ['AES-CBC', 'AES-GCM']
+ALGORITHM = "AES-GCM"
+POS_ALG = ["AES-CBC", "AES-GCM"]
 
-#==================================================================================================
+
+# ==================================================================================================
 # TEMPORAL KEY -> WHEN AUTHENTICATED METHODS will be IMPLEMENTED, THEN THIS IS GOING TO BE ERASED
 def derive_key_from_pin(pin: str):
     salt = b"iot-mock-salt"
@@ -61,11 +62,14 @@ def derive_key_from_pin(pin: str):
         salt=salt,
         dkLen=32,  # 256-bit key
         count=iterations,
-        hmac_hash_module=SHA256
+        hmac_hash_module=SHA256,
     )
 
     return key
-#==================================================================================================
+
+
+# ==================================================================================================
+
 
 def _read_temperature() -> float:
     value = BASELINE_TEMPERATURE_C + random.uniform(
@@ -80,14 +84,16 @@ def _read_humidity() -> float:
     )
     return round(max(HUMIDITY_MIN, min(HUMIDITY_MAX, value)), 1)
 
-#---------------------------FUNCTIONS RELATED TO CRYPTOGRAPHY------------------
-# Function to encrypt data using AEAD. 
+
+# ---------------------------FUNCTIONS RELATED TO CRYPTOGRAPHY------------------
+# Function to encrypt data using AEAD.
 def encrypt_aead_aes_gcm(key: bytes, plaintext: bytes, aad: bytes):
     cipher = AES.new(key, AES.MODE_GCM)
     cipher.update(aad)
     ciphertext, tag = cipher.encrypt_and_digest(plaintext)
 
     return cipher.nonce, ciphertext, tag
+
 
 # Function to encrypt using AE
 def encrypt_aes_cbc_hmac(enc_key: bytes, mac_key: bytes, plaintext: bytes):
@@ -103,7 +109,10 @@ def encrypt_aes_cbc_hmac(enc_key: bytes, mac_key: bytes, plaintext: bytes):
     tag = h.digest()
 
     return iv, ciphertext, tag
-#---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+
 
 def run_device(
     sensor_id: str,
@@ -126,7 +135,7 @@ def run_device(
         if not alg or alg not in POS_ALG:
             print("Algorithm required and it should be: " + POS_ALG, file=sys.stderr)
             sys.exit(1)
-        
+
     elif ui_mode == "screen":
         if not pin:
             print(
@@ -135,10 +144,7 @@ def run_device(
             )
             sys.exit(1)
         if not alg:
-            print(
-                "Screen device requires an encrypted algorithm",
-                file=sys.stderr
-            )
+            print("Screen device requires an encrypted algorithm", file=sys.stderr)
         print(f"Device ID: {sensor_id}")
         print(f"PIN: {pin}")
         print(f"Encrypted algorithm: {alg}")
@@ -167,6 +173,7 @@ def run_device(
             return
         try:
             payload = json.loads(msg.payload.decode())
+            print(f"Payload: {payload}")
         except (json.JSONDecodeError, UnicodeDecodeError):
             return
         if payload.get("device_id") != sensor_id or payload.get("status") != "enrolled":
@@ -188,7 +195,9 @@ def run_device(
     client.loop_start()
 
     def send_pairing() -> None:
-        payload = json.dumps({"action": "pairing", "device_id": sensor_id, "pin": pin, "alg": alg})
+        payload = json.dumps(
+            {"action": "pairing", "device_id": sensor_id, "pin": pin, "alg": alg}
+        )
         client.publish(TOPIC_ENROLL, payload, qos=1)
 
     # Pairing phase
@@ -219,7 +228,7 @@ def run_device(
         temperature = _read_temperature()
         humidity = _read_humidity()
         payload = {
-            "device_id": sensor_id, # Maybe we have to delete it
+            "device_id": sensor_id,  # Maybe we have to delete it
             "temperature": temperature,
             "humidity": humidity,
             "unit_temp": "celsius",
@@ -232,43 +241,42 @@ def run_device(
         # Obtain some metadata
         timestamp = str(int(time.time()))
         aad = (sensor_id + "|" + timestamp).encode()
-        
-        #=================MOCKS PROVISIONALES =====================
+
+        # =================MOCKS PROVISIONALES =====================
         key = derive_key_from_pin(pin)
         session_key = key[:16]
         auth_key = key[16:]
-        key_id = 1 
-        #============================================================================================
-        
+        key_id = 1
+        # ============================================================================================
+
         if alg == "AES-CBC":
             # AE
-            nonce, ciphertext, tag = encrypt_aes_cbc_hmac(session_key, auth_key, plaintext)
+            nonce, ciphertext, tag = encrypt_aes_cbc_hmac(
+                session_key, auth_key, plaintext
+            )
         elif alg == "AES-GCM":
             # AEAD
             nonce, ciphertext, tag = encrypt_aead_aes_gcm(session_key, plaintext, aad)
         else:
             print("ERROR: unknown algorithm", file=sys.stderr)
             sys.exit(1)
-        
+
         # Create new payload
         encrypted_payload = {
-                "device_id": sensor_id,
-                "key_id": key_id,
-                "nonce": base64.b64encode(nonce).decode(),
-                "ciphertext": base64.b64encode(ciphertext).decode(),
-                "tag": base64.b64encode(tag).decode(),
-                "alg": alg,
-                "ts": timestamp,
-            }
+            "device_id": sensor_id,
+            "key_id": key_id,
+            "nonce": base64.b64encode(nonce).decode(),
+            "ciphertext": base64.b64encode(ciphertext).decode(),
+            "tag": base64.b64encode(tag).decode(),
+            "alg": alg,
+            "ts": timestamp,
+        }
 
-        
         client.publish(data_topic, json.dumps(encrypted_payload), qos=1)
         print(
             f"Published: device_id={sensor_id!r}, temp={temperature}°C, humidity={humidity}%"
         )
-        print(
-            f"Encrypted message: {encrypted_payload}"
-        )
+        print(f"Encrypted message: {encrypted_payload}")
         time.sleep(DATA_INTERVAL_SEC)
 
     client.loop_stop()
