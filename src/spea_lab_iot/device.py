@@ -228,7 +228,7 @@ def run_device(
         temperature = _read_temperature()
         humidity = _read_humidity()
         payload = {
-            "device_id": sensor_id,  # Maybe we have to delete it
+            "device_id": sensor_id, 
             "temperature": temperature,
             "humidity": humidity,
             "unit_temp": "celsius",
