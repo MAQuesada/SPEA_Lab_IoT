@@ -44,11 +44,11 @@ ALLOWED_DEVICES_KEY_DEFAULT = "default"
 # When removed, we stop accepting their data.
 
 # Choose mode of Cryptography (maybe can be determinated by user using the platform)
-ALGORITHM_DEFAULT = 'AES-CBC' # 'AES-GCM'
-POS_ALG = ['AES-CBC', 'AES-GCM']
+ALGORITHM_DEFAULT = "AES-CBC"  # 'AES-GCM'
+POS_ALG = ["AES-CBC", "AES-GCM"]
 
 
-#==================================================================================================
+# ==================================================================================================
 # TEMPORAL KEY -> WHEN AUTHENTICATED METHODS will be IMPLEMENTED, THEN THIS IS GOING TO BE ERASED
 def derive_key_from_pin(pin: str):
     salt = b"iot-mock-salt"
@@ -59,15 +59,19 @@ def derive_key_from_pin(pin: str):
         salt=salt,
         dkLen=32,  # 256-bit key
         count=iterations,
-        hmac_hash_module=SHA256
+        hmac_hash_module=SHA256,
     )
 
     return key
-#==================================================================================================
+
+
+# ==================================================================================================
+
 
 def _log(enable: bool, msg: str) -> None:
     if enable:
         print(f"[platform] {msg}")
+
 
 # ------------------- FUNCTIONS RELATED TO CRYPTOGRAPHIC----------------------
 # Function to decrypt using AEAD
@@ -76,24 +80,28 @@ def decrypt_aead_aes_gcm(key, nonce, ciphertext, tag, aad):
     cipher.update(aad)
     return cipher.decrypt_and_verify(ciphertext, tag)
 
-# Function to decrypt using AE 
+
+# Function to decrypt using AE
 def decrypt_aes_cbc(enc_key, mac_key, iv, ciphertext, tag):
     h = HMAC.new(mac_key, digestmod=SHA256)
     h.update(iv + ciphertext)
-    h.verify(tag)  
+    h.verify(tag)
 
     cipher = AES.new(enc_key, AES.MODE_CBC, iv)
     plaintext = unpad(cipher.decrypt(ciphertext), AES.block_size)
 
     return plaintext
-#----------------------------------------------------------------------------
+
+
+# ----------------------------------------------------------------------------
+
 
 def run_platform(log_enabled: bool = False) -> None:
     allowed_devices: dict[str, dict] = {}
     # Add by default
     allowed_devices[ALLOWED_DEVICES_KEY_DEFAULT] = {
         "pin": PLATFORM_DEFAULT_PIN,
-        "alg": ALGORITHM_DEFAULT
+        "alg": ALGORITHM_DEFAULT,
     }
     enrolled_devices: set[str] = set()
     log_mode = [log_enabled]  # use list so closure can mutate
@@ -124,16 +132,26 @@ def run_platform(log_enabled: bool = False) -> None:
         device_id = payload.get("device_id")
         pin = payload.get("pin")
         alg = payload.get("alg")
-        if action != "pairing" or not device_id or pin is None or alg is None or alg not in POS_ALG:
+        if (
+            action != "pairing"
+            or not device_id
+            or pin is None
+            or alg is None
+            or alg not in POS_ALG
+        ):
             _log(
                 log_mode[0],
                 f"Ignored enroll message: action={action!r}, device_id={device_id!r}",
             )
             return
         # Accept if pin matches default or (device_id in allowed_devices and pin matches)
-        platform_pin = allowed_devices.get(ALLOWED_DEVICES_KEY_DEFAULT)
+        platform_pin = allowed_devices.get(ALLOWED_DEVICES_KEY_DEFAULT).get("pin")
+
+        if pin == platform_pin and allowed_devices.get(device_id) is None:
+            allowed_devices[device_id] = {"pin": pin, "alg": alg}
+
         allowed_dict = allowed_devices.get(device_id)
-        if allowed_dict is None:
+        if allowed_dict is None and pin != platform_pin:
             _log(
                 log_mode[0], f"Pairing rejected for device_id={device_id!r} (wrong PIN)"
             )
@@ -142,15 +160,11 @@ def run_platform(log_enabled: bool = False) -> None:
             allowed_pin = allowed_dict.get("pin")
             if pin != platform_pin and pin != allowed_pin:
                 _log(
-                    log_mode[0], f"Pairing rejected for device_id={device_id!r} (wrong PIN)"
+                    log_mode[0],
+                    f"Pairing rejected for device_id={device_id!r} (wrong PIN)",
                 )
                 return
-        # Keypad devices pair with platform PIN; add to allowed_devices so they can be removed later
-        if device_id not in allowed_devices:
-            allowed_devices[device_id] = {
-                "pin": pin, 
-                "alg": alg
-            }
+
         enrolled_devices.add(device_id)
         _log(log_mode[0], f"Device enrolled: device_id={device_id!r}")
         response = {
@@ -169,18 +183,18 @@ def run_platform(log_enabled: bool = False) -> None:
         except (json.JSONDecodeError, UnicodeDecodeError):
             _log(log_mode[0], "Invalid JSON on data topic")
             return
-        
+
         # Check if it is valid
         device_id = payload.get("device_id")
         if not device_id:
             _log(log_mode[0], "Data message without device_id, ignored")
             return
-        
+
         if device_id not in enrolled_devices:
             _log(log_mode[0], f"Ignored data from non-enrolled device_id={device_id!r}")
             return
-        
-        # Obtain the pin 
+
+        # Obtain the pin
         pin = allowed_devices[device_id].get("pin")
 
         # Obtain neccessary data to decrypt
@@ -188,12 +202,12 @@ def run_platform(log_enabled: bool = False) -> None:
         if not algorithm or algorithm not in POS_ALG:
             _log(log_mode[0], "Data message without alg, ignored")
             return
-        
+
         nonce = base64.b64decode(payload.get("nonce"))
         if not nonce:
             _log(log_mode[0], "Data message without nonce, ignored")
             return
-        
+
         ciphertext = base64.b64decode(payload.get("ciphertext"))
         if not ciphertext:
             _log(log_mode[0], "Data message without ciphertext, ignored")
@@ -203,7 +217,7 @@ def run_platform(log_enabled: bool = False) -> None:
         if not tag:
             _log(log_mode[0], "Data message without tag, ignored")
             return
-        
+
         timestamp = payload.get("ts")
         if not timestamp:
             _log(log_mode[0], "Data message without timestamp, ignored")
@@ -213,12 +227,12 @@ def run_platform(log_enabled: bool = False) -> None:
         key = derive_key_from_pin(pin)
         session_key = key[:16]
         auth_key = key[16:]
-        #===========================================================
+        # ===========================================================
 
         if algorithm == "AES-CBC":
             # AE
             plaintext = decrypt_aes_cbc(session_key, auth_key, nonce, ciphertext, tag)
-            
+
         elif algorithm == "AES-GCM":
             # AEAD
             aad = (device_id + "|" + timestamp).encode()
@@ -274,10 +288,7 @@ def run_platform(log_enabled: bool = False) -> None:
                     elif alg not in POS_ALG:
                         print("Encrypted algorithm only can be:" + POS_ALG)
                     else:
-                        allowed_devices[did] = {
-                            "pin": pin, 
-                            "alg": alg
-                        }
+                        allowed_devices[did] = {"pin": pin, "alg": alg}
                         print(f"Added device_id={did!r} with PIN.")
                 else:
                     print("Device ID and PIN required.")
