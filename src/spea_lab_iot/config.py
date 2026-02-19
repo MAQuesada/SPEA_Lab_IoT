@@ -19,3 +19,11 @@ TOPIC_FEED = "iot/feed"
 
 # Platform: default PIN for keypad devices (cannot be deleted)
 PLATFORM_DEFAULT_PIN = os.environ.get("PLATFORM_DEFAULT_PIN", "platform-pin")
+
+# Key agreement topics (R4)
+TOPIC_DH_INIT     = "iot/dh/init"      # device -> platform  {device_id, algorithm, public_key}
+TOPIC_DH_RESPONSE = "iot/dh/response"  # platform -> device  {device_id, public_key, hmac_transcript}
+TOPIC_DH_FINISH   = "iot/dh/finish"    # device -> platform  {device_id, hmac_transcript}
+
+# Default key agreement algorithm for devices
+DEFAULT_KA_ALGORITHM = "ecdh_ephemeral"  # or "auth_dh"
