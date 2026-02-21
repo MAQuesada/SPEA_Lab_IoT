@@ -67,4 +67,5 @@ When the platform receives the encrypted message, it first verifies that all the
 
 ---
 
-ANNOTATION -> MAYBE AFTER THE IMPLEMENTATION OF KEYS, THIS DOCUMENTATION HAS SEVERAL CHANGES
+
+> **See also**: Key management (Master Key derivation from PIN, Session Key rotation) is fully documented in [R2_KEY_MANAGEMENT.md](R2_KEY_MANAGEMENT.md). The `key_id` field in the `iot/data` payload corresponds to the current Session Key ID managed by the `KeyManager`.
