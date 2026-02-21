@@ -116,14 +116,17 @@ def run_device(
     ui_mode: "keypad" (user enters platform PIN) or "screen" (device shows ID and PIN, retries until enrolled).
     pin: for keypad, pass None and user will be prompted; for screen, pass the PIN (e.g. from env in device_screen.py).
     """
-    if ui_mode == "keypad" and pin is None and alg is None:
-        pin = input("Enter platform code: ").strip()
-        alg = input("Enter encrypted algorithm (AES-CBC or AES-GCM): ").strip()
+    if ui_mode == "keypad":
+        # If PIN or algorithm not provided, prompt interactively
+        if pin is None:
+            pin = input("Enter platform code: ").strip()
+        if alg is None:
+            alg = input("Enter encrypted algorithm (AES-CBC or AES-GCM): ").strip()
         if not pin:
             print("PIN required.", file=sys.stderr)
             sys.exit(1)
         if not alg or alg not in POS_ALG:
-            print("Algorithm required and it should be: " + POS_ALG, file=sys.stderr)
+            print("Algorithm required. Options: " + str(POS_ALG), file=sys.stderr)
             sys.exit(1)
 
     elif ui_mode == "screen":
