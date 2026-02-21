@@ -248,20 +248,22 @@ def run_device(
     while running:
         # Check if we need to rotate keys
         if key_mgr.check_rotation_needed():
-             timestamp = str(int(time.time()))
-             payload_dict = {"device_id": sensor_id, "ts": timestamp}
-             # Authenticate rekey request with Master Key
-             h = HMAC.new(key_mgr.master_key, digestmod=SHA256)
-             h.update(json.dumps(payload_dict, sort_keys=True).encode())
-             payload_dict["sig"] = base64.b64encode(h.digest()).decode()
-             
-             client.publish(TOPIC_REKEY, json.dumps(payload_dict), qos=1)
-             print("Invoked key rotation...")
-             
-             # If no session key (first run), wait
-             if not key_mgr.session_key:
-                 time.sleep(1)
-                 continue
+            timestamp = str(int(time.time()))
+            payload_dict = {"device_id": sensor_id, "ts": timestamp}
+            # Authenticate rekey request with Master Key
+            h = HMAC.new(key_mgr.master_key, digestmod=SHA256)
+            h.update(json.dumps(payload_dict, sort_keys=True).encode())
+            payload_dict["sig"] = base64.b64encode(h.digest()).decode()
+
+            client.publish(TOPIC_REKEY, json.dumps(payload_dict), qos=1)
+            print("Invoked key rotation...")
+
+            # Always wait for the new key before publishing,
+            # regardless of whether we had an existing session key.
+            # If we published with the old key while the platform already
+            # switched to the new one, AES-GCM MAC check would fail.
+            time.sleep(2)
+            continue
 
         temperature = _read_temperature()
         humidity = _read_humidity()
