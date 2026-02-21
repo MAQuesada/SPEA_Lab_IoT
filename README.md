@@ -80,9 +80,6 @@ uv run python src/spea_lab_iot/main.py
 uv run ruff check .
 ```
 
-- **MQTT demo** (sensor + subscriber, no enrollment): [docs/MQTT_DEMO.md](docs/MQTT_DEMO.md)
-- **R1: Enrollable devices + platform** (pairing, keypad/screen, iot/feed): [docs/R1_DEVICE_PLATFORM.md](docs/R1_DEVICE_PLATFORM.md)
-
 ## Development
 
 ### Run the application
@@ -116,7 +113,16 @@ Scripts load variables from a `.env` file (copy `example.env` to `.env` and adju
 | `MQTT_PASSWORD` | All | MQTT password (default: `public`) |
 | `PLATFORM_DEFAULT_PIN` | Platform | Default PIN for keypad devices; key `"default"` cannot be removed |
 | `PLATFORM_LOG` | Platform | Set to `1` or `true` to enable log mode on startup |
+| `KEY_ROTATION_INTERVAL_SEC` | Device / Platform | Seconds between automatic session key rotations (default: `60`) |
+| `KEY_ROTATION_MSG_LIMIT` | Device / Platform | Number of messages before triggering key rotation (default: `100`) |
 
 ## Python version
 
 The project uses Python 3.11+ (see `.python-version`). UV will use this version when creating the environment.
+
+## Docs
+
+- **MQTT demo** (sensor + subscriber, no enrollment): [docs/MQTT_DEMO.md](docs/MQTT_DEMO.md)
+- **R1: Enrollable devices + platform** (pairing, keypad/screen, iot/feed): [docs/R1_DEVICE_PLATFORM.md](docs/R1_DEVICE_PLATFORM.md)
+- **R2: Key Management** (Master Key, Session Key, rotation): [docs/R2_KEY_MANAGEMENT.md](docs/R2_KEY_MANAGEMENT.md)
+- **R5: Data Encryption** (AES-GCM, AES-CBC+HMAC): [docs/R5_DATA_ENCRYPTION.md](docs/R5_DATA_ENCRYPTION.md)
