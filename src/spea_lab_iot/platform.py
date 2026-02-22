@@ -29,7 +29,10 @@ from spea_lab_iot.config import (
     TOPIC_ENROLL,
     TOPIC_ENROLL_RESPONSE,
     TOPIC_FEED,
+    TOPIC_REKEY,
+    TOPIC_REKEY_RESPONSE,
 )
+from spea_lab_iot.key_manager import KeyManager
 
 # Imports related to cryptographic
 from Crypto.Cipher import AES
@@ -49,20 +52,7 @@ POS_ALG = ["AES-CBC", "AES-GCM"]
 
 
 # ==================================================================================================
-# TEMPORAL KEY -> WHEN AUTHENTICATED METHODS will be IMPLEMENTED, THEN THIS IS GOING TO BE ERASED
-def derive_key_from_pin(pin: str):
-    salt = b"iot-mock-salt"
-    iterations = 100_000
 
-    key = PBKDF2(
-        password=pin,
-        salt=salt,
-        dkLen=32,  # 256-bit key
-        count=iterations,
-        hmac_hash_module=SHA256,
-    )
-
-    return key
 
 
 # ==================================================================================================
@@ -96,7 +86,7 @@ def decrypt_aes_cbc(enc_key, mac_key, iv, ciphertext, tag):
 # ----------------------------------------------------------------------------
 
 
-def run_platform(log_enabled: bool = False) -> None:
+def run_platform(log_enabled: bool = False, interactive: bool = True) -> None:
     allowed_devices: dict[str, dict] = {}
     # Add by default
     allowed_devices[ALLOWED_DEVICES_KEY_DEFAULT] = {
@@ -104,6 +94,7 @@ def run_platform(log_enabled: bool = False) -> None:
         "alg": ALGORITHM_DEFAULT,
     }
     enrolled_devices: set[str] = set()
+    device_managers: dict[str, KeyManager] = {}
     log_mode = [log_enabled]  # use list so closure can mutate
 
     def on_connect(
@@ -116,6 +107,7 @@ def run_platform(log_enabled: bool = False) -> None:
         if reason_code == 0:
             _log(log_mode[0], f"Connected to broker {MQTT_BROKER_HOST}")
             client.subscribe(TOPIC_ENROLL, qos=1)
+            client.subscribe(TOPIC_REKEY, qos=1)
             client.subscribe(TOPIC_DATA, qos=1)
         else:
             print(f"Connection failed: {reason_code}", file=sys.stderr)
@@ -166,6 +158,12 @@ def run_platform(log_enabled: bool = False) -> None:
                 return
 
         enrolled_devices.add(device_id)
+        
+        # Initialize KeyManager for the device
+        km = KeyManager(device_id)
+        km.derive_master_key(pin)
+        device_managers[device_id] = km
+        
         _log(log_mode[0], f"Device enrolled: device_id={device_id!r}")
         response = {
             "device_id": device_id,
@@ -173,6 +171,54 @@ def run_platform(log_enabled: bool = False) -> None:
             "data_topic": TOPIC_DATA,
         }
         client.publish(TOPIC_ENROLL_RESPONSE, json.dumps(response), qos=1)
+
+    def on_rekey_message(
+        client: mqtt.Client, userdata: object, msg: mqtt.MQTTMessage
+    ) -> None:
+        try:
+            payload = json.loads(msg.payload.decode())
+            device_id = payload.get("device_id")
+            sig = payload.get("sig")
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return
+
+        if not device_id or device_id not in enrolled_devices or not sig:
+            return
+
+        km = device_managers.get(device_id)
+        if not km:
+            return
+
+        # Verify signature
+        payload_verify = payload.copy()
+        del payload_verify["sig"]
+        h = HMAC.new(km.master_key, digestmod=SHA256)
+        h.update(json.dumps(payload_verify, sort_keys=True).encode())
+        try:
+            h.verify(base64.b64decode(sig))
+        except ValueError:
+            _log(log_mode[0], f"Invalid rekey signature from {device_id}")
+            return
+
+        # Generate new key
+        new_key = km.generate_random_session_key()
+        new_id = km.session_key_id + 1
+        km.set_session_key(new_key, new_id)
+
+        # Encrypt response with Master Key (AES-GCM)
+        iv = get_random_bytes(16)
+        cipher = AES.new(km.master_key, AES.MODE_GCM, nonce=iv)
+        ciphertext, tag = cipher.encrypt_and_digest(new_key)
+
+        response = {
+            "device_id": device_id,
+            "key_id": new_id,
+            "nonce": base64.b64encode(iv).decode(),
+            "ciphertext": base64.b64encode(ciphertext).decode(),
+            "tag": base64.b64encode(tag).decode()
+        }
+        client.publish(TOPIC_REKEY_RESPONSE, json.dumps(response), qos=1)
+        _log(log_mode[0], f"Rekey successful for {device_id}. New key ID: {new_id}")
 
     def on_data_message(
         client: mqtt.Client, userdata: object, msg: mqtt.MQTTMessage
@@ -223,21 +269,26 @@ def run_platform(log_enabled: bool = False) -> None:
             _log(log_mode[0], "Data message without timestamp, ignored")
             return
 
-        ##=================MOCKS PROVISIONALES =====================
-        key = derive_key_from_pin(pin)
-        session_key = key[:16]
-        auth_key = key[16:]
-        # ===========================================================
-
+        # Get KeyManager
+        km = device_managers.get(device_id)
+        if not km or not km.session_key:
+             _log(log_mode[0], f"No session key for {device_id}")
+             return
+             
+        # Use session key from KeyManager
+        session_key_bytes, key_id_stored = km.get_session_key()
+        
         if algorithm == "AES-CBC":
             # AE
-            plaintext = decrypt_aes_cbc(session_key, auth_key, nonce, ciphertext, tag)
+            enc_key = session_key_bytes[:16]
+            auth_key = session_key_bytes[16:]
+            plaintext = decrypt_aes_cbc(enc_key, auth_key, nonce, ciphertext, tag)
 
         elif algorithm == "AES-GCM":
             # AEAD
             aad = (device_id + "|" + timestamp).encode()
-
-            plaintext = decrypt_aead_aes_gcm(session_key, nonce, ciphertext, tag, aad)
+            # Use full 32 bytes for GCM (matching device.py)
+            plaintext = decrypt_aead_aes_gcm(session_key_bytes, nonce, ciphertext, tag, aad)
         else:
             _log(log_mode[0], "Algorithm type invalid")
             return
@@ -251,6 +302,8 @@ def run_platform(log_enabled: bool = False) -> None:
     ) -> None:
         if msg.topic == TOPIC_ENROLL:
             on_enroll_message(client, userdata, msg)
+        elif msg.topic == TOPIC_REKEY:
+            on_rekey_message(client, userdata, msg)
         elif msg.topic == TOPIC_DATA:
             on_data_message(client, userdata, msg)
 
@@ -310,11 +363,23 @@ def run_platform(log_enabled: bool = False) -> None:
             elif choice == "4":
                 break
 
-    try:
-        console_loop()
-    finally:
-        client.loop_stop()
-        client.disconnect()
+    if interactive:
+        try:
+            console_loop()
+        finally:
+            client.loop_stop()
+            client.disconnect()
+    else:
+        # Non-interactive mode (e.g. testing): Block until interrupted
+        try:
+            while True:
+                time.sleep(1)
+        except (KeyboardInterrupt, SystemExit):
+            pass
+        finally:
+            client.loop_stop()
+            client.disconnect()
+    
     print("Platform stopped.")
 
 

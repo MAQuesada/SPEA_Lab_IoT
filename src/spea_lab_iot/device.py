@@ -23,7 +23,10 @@ from spea_lab_iot.config import (
     TOPIC_DATA,
     TOPIC_ENROLL,
     TOPIC_ENROLL_RESPONSE,
+    TOPIC_REKEY,
+    TOPIC_REKEY_RESPONSE,
 )
+from spea_lab_iot.key_manager import KeyManager
 
 # imports related to cryptography
 from Crypto.Random import get_random_bytes
@@ -52,20 +55,7 @@ POS_ALG = ["AES-CBC", "AES-GCM"]
 
 
 # ==================================================================================================
-# TEMPORAL KEY -> WHEN AUTHENTICATED METHODS will be IMPLEMENTED, THEN THIS IS GOING TO BE ERASED
-def derive_key_from_pin(pin: str):
-    salt = b"iot-mock-salt"
-    iterations = 100_000
 
-    key = PBKDF2(
-        password=pin,
-        salt=salt,
-        dkLen=32,  # 256-bit key
-        count=iterations,
-        hmac_hash_module=SHA256,
-    )
-
-    return key
 
 
 # ==================================================================================================
@@ -126,14 +116,17 @@ def run_device(
     ui_mode: "keypad" (user enters platform PIN) or "screen" (device shows ID and PIN, retries until enrolled).
     pin: for keypad, pass None and user will be prompted; for screen, pass the PIN (e.g. from env in device_screen.py).
     """
-    if ui_mode == "keypad" and pin is None and alg is None:
-        pin = input("Enter platform code: ").strip()
-        alg = input("Enter encrypted algorithm (AES-CBC or AES-GCM): ").strip()
+    if ui_mode == "keypad":
+        # If PIN or algorithm not provided, prompt interactively
+        if pin is None:
+            pin = input("Enter platform code: ").strip()
+        if alg is None:
+            alg = input("Enter encrypted algorithm (AES-CBC or AES-GCM): ").strip()
         if not pin:
             print("PIN required.", file=sys.stderr)
             sys.exit(1)
         if not alg or alg not in POS_ALG:
-            print("Algorithm required and it should be: " + POS_ALG, file=sys.stderr)
+            print("Algorithm required. Options: " + str(POS_ALG), file=sys.stderr)
             sys.exit(1)
 
     elif ui_mode == "screen":
@@ -153,6 +146,11 @@ def run_device(
         print("ui_mode must be 'keypad' or 'screen'.", file=sys.stderr)
         sys.exit(1)
 
+    key_mgr = KeyManager(sensor_id)
+    key_mgr.derive_master_key(pin)
+    if not key_mgr.load_keys():
+        print("No previous keys found or failed to load. Waiting for enrollment/rekey.")
+
     enrolled_event = threading.Event()
     data_topic_ref: list[str | None] = [None]
 
@@ -165,10 +163,33 @@ def run_device(
     ) -> None:
         if reason_code == 0:
             client.subscribe(TOPIC_ENROLL_RESPONSE, qos=1)
+            client.subscribe(TOPIC_REKEY_RESPONSE, qos=1)
 
     def on_message(
         client: mqtt.Client, userdata: object, msg: mqtt.MQTTMessage
     ) -> None:
+        if msg.topic == TOPIC_REKEY_RESPONSE:
+            try:
+                payload = json.loads(msg.payload.decode())
+                if payload.get("device_id") != sensor_id:
+                    return
+                
+                # Decrypt new session key
+                nonce = base64.b64decode(payload["nonce"])
+                tag = base64.b64decode(payload["tag"])
+                ciphertext = base64.b64decode(payload["ciphertext"])
+                key_id = payload["key_id"]
+                
+                cipher = AES.new(key_mgr.master_key, AES.MODE_GCM, nonce=nonce)
+                new_session_key = cipher.decrypt_and_verify(ciphertext, tag)
+                
+                key_mgr.set_session_key(new_session_key, key_id)
+                print(f"Key rotation successful. New Key ID: {key_id}")
+                
+            except Exception as e:
+                print(f"Error handling rekey response: {e}")
+            return
+
         if msg.topic != TOPIC_ENROLL_RESPONSE:
             return
         try:
@@ -225,6 +246,25 @@ def run_device(
     signal.signal(signal.SIGINT, stop)
 
     while running:
+        # Check if we need to rotate keys
+        if key_mgr.check_rotation_needed():
+            timestamp = str(int(time.time()))
+            payload_dict = {"device_id": sensor_id, "ts": timestamp}
+            # Authenticate rekey request with Master Key
+            h = HMAC.new(key_mgr.master_key, digestmod=SHA256)
+            h.update(json.dumps(payload_dict, sort_keys=True).encode())
+            payload_dict["sig"] = base64.b64encode(h.digest()).decode()
+
+            client.publish(TOPIC_REKEY, json.dumps(payload_dict), qos=1)
+            print("Invoked key rotation...")
+
+            # Always wait for the new key before publishing,
+            # regardless of whether we had an existing session key.
+            # If we published with the old key while the platform already
+            # switched to the new one, AES-GCM MAC check would fail.
+            time.sleep(2)
+            continue
+
         temperature = _read_temperature()
         humidity = _read_humidity()
         payload = {
@@ -242,41 +282,43 @@ def run_device(
         timestamp = str(int(time.time()))
         aad = (sensor_id + "|" + timestamp).encode()
 
-        # =================MOCKS PROVISIONALES =====================
-        key = derive_key_from_pin(pin)
-        session_key = key[:16]
-        auth_key = key[16:]
-        key_id = 1
-        # ============================================================================================
+        try:
+            session_key_bytes, key_id = key_mgr.get_session_key()
+            
+            if alg == "AES-CBC":
+                # Split 32-byte key into 16 enc + 16 auth
+                enc_key = session_key_bytes[:16]
+                auth_key = session_key_bytes[16:]
+                nonce, ciphertext, tag = encrypt_aes_cbc_hmac(
+                    enc_key, auth_key, plaintext
+                )
+            elif alg == "AES-GCM":
+                # Use full 32-byte key for AES-256-GCM
+                nonce, ciphertext, tag = encrypt_aead_aes_gcm(session_key_bytes, plaintext, aad)
+            else:
+                print("ERROR: unknown algorithm", file=sys.stderr)
+                sys.exit(1)
 
-        if alg == "AES-CBC":
-            # AE
-            nonce, ciphertext, tag = encrypt_aes_cbc_hmac(
-                session_key, auth_key, plaintext
+            # Create new payload
+            encrypted_payload = {
+                "device_id": sensor_id,
+                "key_id": key_id,
+                "nonce": base64.b64encode(nonce).decode(),
+                "ciphertext": base64.b64encode(ciphertext).decode(),
+                "tag": base64.b64encode(tag).decode(),
+                "alg": alg,
+                "ts": timestamp,
+            }
+
+            client.publish(data_topic, json.dumps(encrypted_payload), qos=1)
+            print(
+                f"Published: device_id={sensor_id!r}, temp={temperature}°C, humidity={humidity}%"
             )
-        elif alg == "AES-GCM":
-            # AEAD
-            nonce, ciphertext, tag = encrypt_aead_aes_gcm(session_key, plaintext, aad)
-        else:
-            print("ERROR: unknown algorithm", file=sys.stderr)
-            sys.exit(1)
-
-        # Create new payload
-        encrypted_payload = {
-            "device_id": sensor_id,
-            "key_id": key_id,
-            "nonce": base64.b64encode(nonce).decode(),
-            "ciphertext": base64.b64encode(ciphertext).decode(),
-            "tag": base64.b64encode(tag).decode(),
-            "alg": alg,
-            "ts": timestamp,
-        }
-
-        client.publish(data_topic, json.dumps(encrypted_payload), qos=1)
-        print(
-            f"Published: device_id={sensor_id!r}, temp={temperature}°C, humidity={humidity}%"
-        )
-        print(f"Encrypted message: {encrypted_payload}")
+            print(f"Encrypted message: {encrypted_payload}")
+            
+        except ValueError as e:
+            print(f"Waiting for key... ({e})")
+            
         time.sleep(DATA_INTERVAL_SEC)
 
     client.loop_stop()
