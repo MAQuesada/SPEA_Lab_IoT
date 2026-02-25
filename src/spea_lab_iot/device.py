@@ -4,9 +4,13 @@ Enrollable device: pairing (keypad or screen mode) then publish sensor data.
 Keypad: user enters platform PIN; device sends pairing once and waits for enrollment.
 Screen: device displays its ID and PIN, retries pairing until enrolled.
 
-After enrollment, performs authenticated DH key agreement (R4) to derive a session key.
+After enrollment:
+  - R4: performs authenticated DH key agreement to derive session_key and auth_key
+  - R2-R3: KeyManager uses the DH-derived session_key and handles rotation
+  - R5: encrypts data with session_key before publishing
 """
 
+import base64
 import json
 import random
 import signal
@@ -24,8 +28,17 @@ from spea_lab_iot.config import (
     TOPIC_DATA,
     TOPIC_ENROLL,
     TOPIC_ENROLL_RESPONSE,
+    TOPIC_REKEY,
+    TOPIC_REKEY_RESPONSE,
 )
+from spea_lab_iot.key_manager import KeyManager
 from spea_lab_iot.dh_device import run_dh_handshake
+
+# imports related to cryptography
+from Crypto.Random import get_random_bytes
+from Crypto.Cipher import AES
+from Crypto.Hash import HMAC, SHA256
+from Crypto.Util.Padding import pad
 
 # Sensor simulation (baseline + deviation)
 BASELINE_TEMPERATURE_C = 24.0
@@ -40,7 +53,7 @@ DATA_INTERVAL_SEC = 5
 PAIRING_RETRY_SEC = 3
 ENROLL_WAIT_TIMEOUT_SEC = 30
 
-# Default key agreement algorithm — device can override
+POS_ALG = ["AES-CBC", "AES-GCM"]
 DEFAULT_KA_ALGORITHM = "ecdh_ephemeral"  # or "auth_dh"
 
 
@@ -58,39 +71,74 @@ def _read_humidity() -> float:
     return round(max(HUMIDITY_MIN, min(HUMIDITY_MAX, value)), 1)
 
 
+# ---------------------------FUNCTIONS RELATED TO CRYPTOGRAPHY------------------
+
+def encrypt_aead_aes_gcm(key: bytes, plaintext: bytes, aad: bytes):
+    cipher = AES.new(key, AES.MODE_GCM)
+    cipher.update(aad)
+    ciphertext, tag = cipher.encrypt_and_digest(plaintext)
+    return cipher.nonce, ciphertext, tag
+
+
+def encrypt_aes_cbc_hmac(enc_key: bytes, mac_key: bytes, plaintext: bytes):
+    iv = get_random_bytes(16)
+    cipher = AES.new(enc_key, AES.MODE_CBC, iv)
+    ciphertext = cipher.encrypt(pad(plaintext, AES.block_size))
+    h = HMAC.new(mac_key, digestmod=SHA256)
+    h.update(iv + ciphertext)
+    tag = h.digest()
+    return iv, ciphertext, tag
+
+
+# ---------------------------------------------------------------------------
+
+
 def run_device(
     sensor_id: str,
     ui_mode: str,
     pin: str | None = None,
+    alg: str | None = None,
     ka_algorithm: str = DEFAULT_KA_ALGORITHM,
 ) -> None:
     """
     Run device: pair with platform, perform DH key agreement, then publish data.
 
-    ui_mode    : "keypad" (user enters platform PIN) or "screen" (device shows ID
-                 and PIN, retries until enrolled).
-    pin        : for keypad, pass None and user will be prompted; for screen, pass
-                 the PIN (e.g. from env in device_screen.py).
-    ka_algorithm: key agreement algorithm — "ecdh_ephemeral" (default) or "auth_dh".
+    ui_mode     : "keypad" or "screen"
+    pin         : platform PIN (prompted if None in keypad mode)
+    alg         : encryption algorithm "AES-CBC" or "AES-GCM" (prompted if None in keypad mode)
+    ka_algorithm: DH algorithm "ecdh_ephemeral" (default) or "auth_dh"
     """
-    if ui_mode == "keypad" and pin is None:
-        pin = input("Enter platform code: ").strip()
+    if ui_mode == "keypad":
+        if pin is None:
+            pin = input("Enter platform code: ").strip()
+        if alg is None:
+            alg = input("Enter encryption algorithm (AES-CBC or AES-GCM): ").strip()
         if not pin:
             print("PIN required.", file=sys.stderr)
             sys.exit(1)
+        if not alg or alg not in POS_ALG:
+            print("Algorithm required. Options: " + str(POS_ALG), file=sys.stderr)
+            sys.exit(1)
     elif ui_mode == "screen":
         if not pin:
-            print(
-                "Screen device requires a PIN (pass pin= or set DEVICE_PAIRING_CODE in device_screen).",
-                file=sys.stderr,
-            )
+            print("Screen device requires a PIN.", file=sys.stderr)
+            sys.exit(1)
+        if not alg:
+            print("Screen device requires an encryption algorithm.", file=sys.stderr)
             sys.exit(1)
         print(f"Device ID: {sensor_id}")
         print(f"PIN: {pin}")
+        print(f"Encrypted algorithm: {alg}")
         print("Attempting pairing until enrolled...")
     else:
         print("ui_mode must be 'keypad' or 'screen'.", file=sys.stderr)
         sys.exit(1)
+
+    # R2-R3: initialize KeyManager
+    key_mgr = KeyManager(sensor_id)
+    key_mgr.derive_master_key(pin)
+    if not key_mgr.load_keys():
+        print("No previous keys found. Waiting for DH handshake.")
 
     enrolled_event = threading.Event()
     data_topic_ref: list[str | None] = [None]
@@ -104,10 +152,28 @@ def run_device(
     ) -> None:
         if reason_code == 0:
             client.subscribe(TOPIC_ENROLL_RESPONSE, qos=1)
+            client.subscribe(TOPIC_REKEY_RESPONSE, qos=1)
 
     def on_message(
         client: mqtt.Client, userdata: object, msg: mqtt.MQTTMessage
     ) -> None:
+        if msg.topic == TOPIC_REKEY_RESPONSE:
+            try:
+                payload = json.loads(msg.payload.decode())
+                if payload.get("device_id") != sensor_id:
+                    return
+                nonce      = base64.b64decode(payload["nonce"])
+                tag        = base64.b64decode(payload["tag"])
+                ciphertext = base64.b64decode(payload["ciphertext"])
+                key_id     = payload["key_id"]
+                cipher     = AES.new(key_mgr.master_key, AES.MODE_GCM, nonce=nonce)
+                new_session_key = cipher.decrypt_and_verify(ciphertext, tag)
+                key_mgr.set_session_key(new_session_key, key_id)
+                print(f"Key rotation successful. New Key ID: {key_id}")
+            except Exception as e:
+                print(f"Error handling rekey response: {e}")
+            return
+
         if msg.topic != TOPIC_ENROLL_RESPONSE:
             return
         try:
@@ -133,7 +199,9 @@ def run_device(
     client.loop_start()
 
     def send_pairing() -> None:
-        payload = json.dumps({"action": "pairing", "device_id": sensor_id, "pin": pin})
+        payload = json.dumps(
+            {"action": "pairing", "device_id": sensor_id, "pin": pin, "alg": alg}
+        )
         client.publish(TOPIC_ENROLL, payload, qos=1)
 
     # ---------------------------------------------------------------------- #
@@ -168,12 +236,13 @@ def run_device(
         client.disconnect()
         sys.exit(1)
 
-    # session_key and auth_key are now available for R5 (data encryption)
+    # R2-R3: initialize KeyManager with DH-derived session key
+    key_mgr.set_session_key(session_key, key_id=0)
     print(f"Session key established: {session_key.hex()[:16]}...")
     print(f"Auth key established:    {auth_key.hex()[:16]}...")
 
     # ---------------------------------------------------------------------- #
-    # Phase 3 — Data publishing                                               #
+    # Phase 3 — Data publishing (R5)                                          #
     # ---------------------------------------------------------------------- #
     data_topic = data_topic_ref[0] or TOPIC_DATA
     print(f"Publishing data to {data_topic} (Ctrl+C to stop)")
@@ -187,20 +256,61 @@ def run_device(
     signal.signal(signal.SIGINT, stop)
 
     while running:
+        # R2-R3: check if key rotation is needed
+        if key_mgr.check_rotation_needed():
+            timestamp = str(int(time.time()))
+            payload_dict = {"device_id": sensor_id, "ts": timestamp}
+            h = HMAC.new(key_mgr.master_key, digestmod=SHA256)
+            h.update(json.dumps(payload_dict, sort_keys=True).encode())
+            payload_dict["sig"] = base64.b64encode(h.digest()).decode()
+            client.publish(TOPIC_REKEY, json.dumps(payload_dict), qos=1)
+            print("Invoked key rotation...")
+            time.sleep(2)
+            continue
+
         temperature = _read_temperature()
-        humidity = _read_humidity()
+        humidity    = _read_humidity()
         payload = {
-            "device_id": sensor_id,
-            "temperature": temperature,
-            "humidity": humidity,
-            "unit_temp": "celsius",
+            "device_id":    sensor_id,
+            "temperature":  temperature,
+            "humidity":     humidity,
+            "unit_temp":    "celsius",
             "unit_humidity": "%",
-            # TODO (R5): encrypt payload using session_key before publishing
         }
-        client.publish(data_topic, json.dumps(payload), qos=1)
-        print(
-            f"Published: device_id={sensor_id!r}, temp={temperature}°C, humidity={humidity}%"
-        )
+
+        plaintext = json.dumps(payload).encode()
+        timestamp = str(int(time.time()))
+        aad       = (sensor_id + "|" + timestamp).encode()
+
+        try:
+            session_key_bytes, key_id = key_mgr.get_session_key()
+
+            if alg == "AES-CBC":
+                enc_key  = session_key_bytes[:16]
+                mac_key  = session_key_bytes[16:]
+                nonce, ciphertext, tag = encrypt_aes_cbc_hmac(enc_key, mac_key, plaintext)
+            elif alg == "AES-GCM":
+                nonce, ciphertext, tag = encrypt_aead_aes_gcm(session_key_bytes, plaintext, aad)
+            else:
+                print("ERROR: unknown algorithm", file=sys.stderr)
+                sys.exit(1)
+
+            encrypted_payload = {
+                "device_id":  sensor_id,
+                "key_id":     key_id,
+                "nonce":      base64.b64encode(nonce).decode(),
+                "ciphertext": base64.b64encode(ciphertext).decode(),
+                "tag":        base64.b64encode(tag).decode(),
+                "alg":        alg,
+                "ts":         timestamp,
+            }
+
+            client.publish(data_topic, json.dumps(encrypted_payload), qos=1)
+            print(f"Published: device_id={sensor_id!r}, temp={temperature}°C, humidity={humidity}%")
+
+        except ValueError as e:
+            print(f"Waiting for key... ({e})")
+
         time.sleep(DATA_INTERVAL_SEC)
 
     client.loop_stop()
