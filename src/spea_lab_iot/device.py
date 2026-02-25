@@ -57,6 +57,10 @@ POS_ALG = ["AES-CBC", "AES-GCM"]
 DEFAULT_KA_ALGORITHM = "ecdh_ephemeral"  # or "auth_dh"
 
 
+# ==================================================================================================
+# ==================================================================================================
+
+
 def _read_temperature() -> float:
     value = BASELINE_TEMPERATURE_C + random.uniform(
         -TEMPERATURE_DEVIATION, TEMPERATURE_DEVIATION
@@ -109,10 +113,11 @@ def run_device(
     ka_algorithm: DH algorithm "ecdh_ephemeral" (default) or "auth_dh"
     """
     if ui_mode == "keypad":
+        # If PIN or algorithm not provided, prompt interactively
         if pin is None:
             pin = input("Enter platform code: ").strip()
         if alg is None:
-            alg = input("Enter encryption algorithm (AES-CBC or AES-GCM): ").strip()
+            alg = input("Enter encrypted algorithm (AES-CBC or AES-GCM): ").strip()
         if not pin:
             print("PIN required.", file=sys.stderr)
             sys.exit(1)
@@ -134,11 +139,10 @@ def run_device(
         print("ui_mode must be 'keypad' or 'screen'.", file=sys.stderr)
         sys.exit(1)
 
-    # R2-R3: initialize KeyManager
     key_mgr = KeyManager(sensor_id)
     key_mgr.derive_master_key(pin)
     if not key_mgr.load_keys():
-        print("No previous keys found. Waiting for DH handshake.")
+        print("No previous keys found or failed to load. Waiting for DH handshake.")
 
     enrolled_event = threading.Event()
     data_topic_ref: list[str | None] = [None]
@@ -162,14 +166,19 @@ def run_device(
                 payload = json.loads(msg.payload.decode())
                 if payload.get("device_id") != sensor_id:
                     return
-                nonce      = base64.b64decode(payload["nonce"])
-                tag        = base64.b64decode(payload["tag"])
+                
+                # Decrypt new session key
+                nonce = base64.b64decode(payload["nonce"])
+                tag = base64.b64decode(payload["tag"])
                 ciphertext = base64.b64decode(payload["ciphertext"])
-                key_id     = payload["key_id"]
-                cipher     = AES.new(key_mgr.master_key, AES.MODE_GCM, nonce=nonce)
+                key_id = payload["key_id"]
+                
+                cipher = AES.new(key_mgr.master_key, AES.MODE_GCM, nonce=nonce)
                 new_session_key = cipher.decrypt_and_verify(ciphertext, tag)
+                
                 key_mgr.set_session_key(new_session_key, key_id)
                 print(f"Key rotation successful. New Key ID: {key_id}")
+                
             except Exception as e:
                 print(f"Error handling rekey response: {e}")
             return
@@ -256,15 +265,22 @@ def run_device(
     signal.signal(signal.SIGINT, stop)
 
     while running:
-        # R2-R3: check if key rotation is needed
+        # Check if we need to rotate keys
         if key_mgr.check_rotation_needed():
             timestamp = str(int(time.time()))
             payload_dict = {"device_id": sensor_id, "ts": timestamp}
+            # Authenticate rekey request with Master Key
             h = HMAC.new(key_mgr.master_key, digestmod=SHA256)
             h.update(json.dumps(payload_dict, sort_keys=True).encode())
             payload_dict["sig"] = base64.b64encode(h.digest()).decode()
+
             client.publish(TOPIC_REKEY, json.dumps(payload_dict), qos=1)
             print("Invoked key rotation...")
+
+            # Always wait for the new key before publishing,
+            # regardless of whether we had an existing session key.
+            # If we published with the old key while the platform already
+            # switched to the new one, AES-GCM MAC check would fail.
             time.sleep(2)
             continue
 
@@ -280,16 +296,20 @@ def run_device(
 
         plaintext = json.dumps(payload).encode()
         timestamp = str(int(time.time()))
-        aad       = (sensor_id + "|" + timestamp).encode()
+        aad = (sensor_id + "|" + timestamp).encode()
 
         try:
             session_key_bytes, key_id = key_mgr.get_session_key()
-
+            
             if alg == "AES-CBC":
-                enc_key  = session_key_bytes[:16]
-                mac_key  = session_key_bytes[16:]
-                nonce, ciphertext, tag = encrypt_aes_cbc_hmac(enc_key, mac_key, plaintext)
+                # Split 32-byte key into 16 enc + 16 auth
+                enc_key = session_key_bytes[:16]
+                auth_key = session_key_bytes[16:]
+                nonce, ciphertext, tag = encrypt_aes_cbc_hmac(
+                    enc_key, auth_key, plaintext
+                )
             elif alg == "AES-GCM":
+                # Use full 32-byte key for AES-256-GCM
                 nonce, ciphertext, tag = encrypt_aead_aes_gcm(session_key_bytes, plaintext, aad)
             else:
                 print("ERROR: unknown algorithm", file=sys.stderr)

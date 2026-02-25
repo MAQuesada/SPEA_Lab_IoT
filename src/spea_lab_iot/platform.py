@@ -55,6 +55,10 @@ ALGORITHM_DEFAULT = "AES-CBC"
 POS_ALG = ["AES-CBC", "AES-GCM"]
 
 
+# ==================================================================================================
+# ==================================================================================================
+
+
 def _log(enable: bool, msg: str) -> None:
     if enable:
         print(f"[platform] {msg}")
@@ -190,9 +194,9 @@ def run_platform(log_enabled: bool = False, interactive: bool = True) -> None:
         client: mqtt.Client, userdata: object, msg: mqtt.MQTTMessage
     ) -> None:
         try:
-            payload   = json.loads(msg.payload.decode())
+            payload = json.loads(msg.payload.decode())
             device_id = payload.get("device_id")
-            sig       = payload.get("sig")
+            sig = payload.get("sig")
         except (json.JSONDecodeError, UnicodeDecodeError):
             return
 
@@ -225,11 +229,11 @@ def run_platform(log_enabled: bool = False, interactive: bool = True) -> None:
         ciphertext, tag = cipher.encrypt_and_digest(new_key)
 
         response = {
-            "device_id":  device_id,
-            "key_id":     new_id,
-            "nonce":      base64.b64encode(iv).decode(),
+            "device_id": device_id,
+            "key_id": new_id,
+            "nonce": base64.b64encode(iv).decode(),
             "ciphertext": base64.b64encode(ciphertext).decode(),
-            "tag":        base64.b64encode(tag).decode(),
+            "tag": base64.b64encode(tag).decode()
         }
         client.publish(TOPIC_REKEY_RESPONSE, json.dumps(response), qos=1)
         _log(log_mode[0], f"Rekey successful for {device_id}. New key ID: {new_id}")
@@ -265,27 +269,31 @@ def run_platform(log_enabled: bool = False, interactive: bool = True) -> None:
             _log(log_mode[0], "Incomplete data message, ignored")
             return
 
+        # Get KeyManager
         km = device_managers.get(device_id)
         if not km or not km.session_key:
             _log(log_mode[0], f"No session key for {device_id}")
             return
 
+        # Use session key from KeyManager
         session_key_bytes, _ = km.get_session_key()
 
         try:
             if algorithm == "AES-CBC":
+                # AE
                 enc_key  = session_key_bytes[:16]
                 auth_key = session_key_bytes[16:]
                 plaintext = decrypt_aes_cbc(enc_key, auth_key, nonce, ciphertext, tag)
             elif algorithm == "AES-GCM":
+                # AEAD
                 aad = (device_id + "|" + timestamp).encode()
+                # Use full 32 bytes for GCM (matching device.py)
                 plaintext = decrypt_aead_aes_gcm(session_key_bytes, nonce, ciphertext, tag, aad)
             else:
                 _log(log_mode[0], "Algorithm type invalid")
                 return
         except Exception as e:
             _log(log_mode[0], f"Decryption failed for {device_id}: {e}")
-            return
 
         client.publish(TOPIC_FEED, plaintext, qos=1)
         _log(log_mode[0], f"Relayed data from device_id={device_id!r} to {TOPIC_FEED}")
@@ -383,6 +391,7 @@ def run_platform(log_enabled: bool = False, interactive: bool = True) -> None:
             client.loop_stop()
             client.disconnect()
     else:
+        # Non-interactive mode (e.g. testing): Block until interrupted
         try:
             while True:
                 time.sleep(1)

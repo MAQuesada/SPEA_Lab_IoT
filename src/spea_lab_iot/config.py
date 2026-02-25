@@ -14,6 +14,7 @@ MQTT_PASSWORD = os.environ.get("MQTT_PASSWORD", "public")
 # Topics (R1)
 TOPIC_ENROLL          = "iot/enroll"
 TOPIC_ENROLL_RESPONSE = "iot/enroll/response"
+
 TOPIC_DATA            = "iot/data"
 TOPIC_FEED            = "iot/feed"
 
@@ -25,6 +26,7 @@ TOPIC_REKEY_RESPONSE = "iot/rekey/response"
 TOPIC_DH_INIT     = "iot/dh/init"
 TOPIC_DH_RESPONSE = "iot/dh/response"
 TOPIC_DH_FINISH   = "iot/dh/finish"
+
 
 # Platform: default PIN for keypad devices (cannot be deleted)
 PLATFORM_DEFAULT_PIN = os.environ.get("PLATFORM_DEFAULT_PIN", "platform-pin")
