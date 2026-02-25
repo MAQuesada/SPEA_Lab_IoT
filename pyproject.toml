@@ -25,3 +25,8 @@ packages = ["src/spea_lab_iot", "src/mqtt_demo"]
 [tool.ruff]
 line-length = 88
 target-version = "py311"
+
+[dependency-groups]
+dev = [
+    "cryptography>=46.0.5",
+]

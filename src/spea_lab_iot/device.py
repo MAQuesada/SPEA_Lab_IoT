@@ -54,7 +54,7 @@ PAIRING_RETRY_SEC = 3
 ENROLL_WAIT_TIMEOUT_SEC = 30
 
 POS_ALG = ["AES-CBC", "AES-GCM"]
-DEFAULT_KA_ALGORITHM = "ecdh_ephemeral"  # or "auth_dh"
+POS_DH = ["ecdh_ephemeral", "auth_dh"]
 
 
 # ==================================================================================================
@@ -76,6 +76,7 @@ def _read_humidity() -> float:
 
 
 # ---------------------------FUNCTIONS RELATED TO CRYPTOGRAPHY------------------
+
 
 def encrypt_aead_aes_gcm(key: bytes, plaintext: bytes, aad: bytes):
     cipher = AES.new(key, AES.MODE_GCM)
@@ -102,7 +103,7 @@ def run_device(
     ui_mode: str,
     pin: str | None = None,
     alg: str | None = None,
-    ka_algorithm: str = DEFAULT_KA_ALGORITHM,
+    ka_algorithm: str | None = None,
 ) -> None:
     """
     Run device: pair with platform, perform DH key agreement, then publish data.
@@ -110,7 +111,7 @@ def run_device(
     ui_mode     : "keypad" or "screen"
     pin         : platform PIN (prompted if None in keypad mode)
     alg         : encryption algorithm "AES-CBC" or "AES-GCM" (prompted if None in keypad mode)
-    ka_algorithm: DH algorithm "ecdh_ephemeral" (default) or "auth_dh"
+    ka_algorithm: DH algorithm "ecdh_ephemeral" or "auth_dh" (prompted if None in keypad mode)
     """
     if ui_mode == "keypad":
         # If PIN or algorithm not provided, prompt interactively
@@ -118,11 +119,23 @@ def run_device(
             pin = input("Enter platform code: ").strip()
         if alg is None:
             alg = input("Enter encrypted algorithm (AES-CBC or AES-GCM): ").strip()
+        if ka_algorithm is None:
+            ka_algorithm = input(
+                "Enter key exchange algorithm (ecdh_ephemeral or auth_dh): "
+            ).strip()
+
+        # Check if a field is wrong
         if not pin:
             print("PIN required.", file=sys.stderr)
             sys.exit(1)
         if not alg or alg not in POS_ALG:
             print("Algorithm required. Options: " + str(POS_ALG), file=sys.stderr)
+            sys.exit(1)
+        if not ka_algorithm or ka_algorithm not in POS_DH:
+            print(
+                "Key exchange algorithm required. Options: " + str(POS_DH),
+                file=sys.stderr,
+            )
             sys.exit(1)
     elif ui_mode == "screen":
         if not pin:
@@ -131,9 +144,13 @@ def run_device(
         if not alg:
             print("Screen device requires an encryption algorithm.", file=sys.stderr)
             sys.exit(1)
+        if not ka_algorithm:
+            print("Screen device requires an key exchange algorithm.", file=sys.stderr)
+            sys.exit(1)
         print(f"Device ID: {sensor_id}")
         print(f"PIN: {pin}")
         print(f"Encrypted algorithm: {alg}")
+        print(f"Key exchange algorithm: {ka_algorithm}")
         print("Attempting pairing until enrolled...")
     else:
         print("ui_mode must be 'keypad' or 'screen'.", file=sys.stderr)
@@ -166,19 +183,19 @@ def run_device(
                 payload = json.loads(msg.payload.decode())
                 if payload.get("device_id") != sensor_id:
                     return
-                
+
                 # Decrypt new session key
                 nonce = base64.b64decode(payload["nonce"])
                 tag = base64.b64decode(payload["tag"])
                 ciphertext = base64.b64decode(payload["ciphertext"])
                 key_id = payload["key_id"]
-                
+
                 cipher = AES.new(key_mgr.master_key, AES.MODE_GCM, nonce=nonce)
                 new_session_key = cipher.decrypt_and_verify(ciphertext, tag)
-                
+
                 key_mgr.set_session_key(new_session_key, key_id)
                 print(f"Key rotation successful. New Key ID: {key_id}")
-                
+
             except Exception as e:
                 print(f"Error handling rekey response: {e}")
             return
@@ -285,12 +302,12 @@ def run_device(
             continue
 
         temperature = _read_temperature()
-        humidity    = _read_humidity()
+        humidity = _read_humidity()
         payload = {
-            "device_id":    sensor_id,
-            "temperature":  temperature,
-            "humidity":     humidity,
-            "unit_temp":    "celsius",
+            "device_id": sensor_id,
+            "temperature": temperature,
+            "humidity": humidity,
+            "unit_temp": "celsius",
             "unit_humidity": "%",
         }
 
@@ -300,7 +317,7 @@ def run_device(
 
         try:
             session_key_bytes, key_id = key_mgr.get_session_key()
-            
+
             if alg == "AES-CBC":
                 # Split 32-byte key into 16 enc + 16 auth
                 enc_key = session_key_bytes[:16]
@@ -310,23 +327,27 @@ def run_device(
                 )
             elif alg == "AES-GCM":
                 # Use full 32-byte key for AES-256-GCM
-                nonce, ciphertext, tag = encrypt_aead_aes_gcm(session_key_bytes, plaintext, aad)
+                nonce, ciphertext, tag = encrypt_aead_aes_gcm(
+                    session_key_bytes, plaintext, aad
+                )
             else:
                 print("ERROR: unknown algorithm", file=sys.stderr)
                 sys.exit(1)
 
             encrypted_payload = {
-                "device_id":  sensor_id,
-                "key_id":     key_id,
-                "nonce":      base64.b64encode(nonce).decode(),
+                "device_id": sensor_id,
+                "key_id": key_id,
+                "nonce": base64.b64encode(nonce).decode(),
                 "ciphertext": base64.b64encode(ciphertext).decode(),
-                "tag":        base64.b64encode(tag).decode(),
-                "alg":        alg,
-                "ts":         timestamp,
+                "tag": base64.b64encode(tag).decode(),
+                "alg": alg,
+                "ts": timestamp,
             }
 
             client.publish(data_topic, json.dumps(encrypted_payload), qos=1)
-            print(f"Published: device_id={sensor_id!r}, temp={temperature}°C, humidity={humidity}%")
+            print(
+                f"Published: device_id={sensor_id!r}, temp={temperature}°C, humidity={humidity}%"
+            )
 
         except ValueError as e:
             print(f"Waiting for key... ({e})")

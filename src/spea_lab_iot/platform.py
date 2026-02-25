@@ -53,6 +53,7 @@ ALLOWED_DEVICES_KEY_DEFAULT = "default"
 
 ALGORITHM_DEFAULT = "AES-CBC"
 POS_ALG = ["AES-CBC", "AES-GCM"]
+POS_DH = ["ecdh_ephemeral", "auth_dh"]
 
 
 # ==================================================================================================
@@ -65,6 +66,7 @@ def _log(enable: bool, msg: str) -> None:
 
 
 # ------------------- FUNCTIONS RELATED TO CRYPTOGRAPHIC----------------------
+
 
 def decrypt_aead_aes_gcm(key, nonce, ciphertext, tag, aad):
     cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
@@ -101,6 +103,7 @@ def run_platform(log_enabled: bool = False, interactive: bool = True) -> None:
     # We use a wrapper that extracts the pin from allowed_devices
     class _PinView(dict):
         """Read-only view: device_id -> pin, compatible with DHPlatformHandler."""
+
         def __init__(self, source: dict):
             self._source = source
 
@@ -146,10 +149,10 @@ def run_platform(log_enabled: bool = False, interactive: bool = True) -> None:
         except (json.JSONDecodeError, UnicodeDecodeError):
             _log(log_mode[0], "Invalid JSON on enroll topic")
             return
-        action    = payload.get("action")
+        action = payload.get("action")
         device_id = payload.get("device_id")
-        pin       = payload.get("pin")
-        alg       = payload.get("alg")
+        pin = payload.get("pin")
+        alg = payload.get("alg")
         if (
             action != "pairing"
             or not device_id
@@ -157,7 +160,10 @@ def run_platform(log_enabled: bool = False, interactive: bool = True) -> None:
             or alg is None
             or alg not in POS_ALG
         ):
-            _log(log_mode[0], f"Ignored enroll message: action={action!r}, device_id={device_id!r}")
+            _log(
+                log_mode[0],
+                f"Ignored enroll message: action={action!r}, device_id={device_id!r}",
+            )
             return
 
         platform_pin = allowed_devices.get(ALLOWED_DEVICES_KEY_DEFAULT).get("pin")
@@ -167,12 +173,17 @@ def run_platform(log_enabled: bool = False, interactive: bool = True) -> None:
 
         allowed_dict = allowed_devices.get(device_id)
         if allowed_dict is None and pin != platform_pin:
-            _log(log_mode[0], f"Pairing rejected for device_id={device_id!r} (wrong PIN)")
+            _log(
+                log_mode[0], f"Pairing rejected for device_id={device_id!r} (wrong PIN)"
+            )
             return
         else:
             allowed_pin = allowed_dict.get("pin")
             if pin != platform_pin and pin != allowed_pin:
-                _log(log_mode[0], f"Pairing rejected for device_id={device_id!r} (wrong PIN)")
+                _log(
+                    log_mode[0],
+                    f"Pairing rejected for device_id={device_id!r} (wrong PIN)",
+                )
                 return
 
         enrolled_devices.add(device_id)
@@ -184,8 +195,8 @@ def run_platform(log_enabled: bool = False, interactive: bool = True) -> None:
 
         _log(log_mode[0], f"Device enrolled: device_id={device_id!r}")
         response = {
-            "device_id":  device_id,
-            "status":     "enrolled",
+            "device_id": device_id,
+            "status": "enrolled",
             "data_topic": TOPIC_DATA,
         }
         client.publish(TOPIC_ENROLL_RESPONSE, json.dumps(response), qos=1)
@@ -219,7 +230,7 @@ def run_platform(log_enabled: bool = False, interactive: bool = True) -> None:
 
         # Generate new session key and update KeyManager + session_keys dict
         new_key = km.generate_random_session_key()
-        new_id  = km.session_key_id + 1
+        new_id = km.session_key_id + 1
         km.set_session_key(new_key, new_id)
         session_keys[device_id] = new_key  # R4: keep session_keys in sync
 
@@ -233,7 +244,7 @@ def run_platform(log_enabled: bool = False, interactive: bool = True) -> None:
             "key_id": new_id,
             "nonce": base64.b64encode(iv).decode(),
             "ciphertext": base64.b64encode(ciphertext).decode(),
-            "tag": base64.b64encode(tag).decode()
+            "tag": base64.b64encode(tag).decode(),
         }
         client.publish(TOPIC_REKEY_RESPONSE, json.dumps(response), qos=1)
         _log(log_mode[0], f"Rekey successful for {device_id}. New key ID: {new_id}")
@@ -260,10 +271,10 @@ def run_platform(log_enabled: bool = False, interactive: bool = True) -> None:
             _log(log_mode[0], "Data message without valid alg, ignored")
             return
 
-        nonce      = base64.b64decode(payload.get("nonce", ""))
+        nonce = base64.b64decode(payload.get("nonce", ""))
         ciphertext = base64.b64decode(payload.get("ciphertext", ""))
-        tag        = base64.b64decode(payload.get("tag", ""))
-        timestamp  = payload.get("ts")
+        tag = base64.b64decode(payload.get("tag", ""))
+        timestamp = payload.get("ts")
 
         if not nonce or not ciphertext or not tag or not timestamp:
             _log(log_mode[0], "Incomplete data message, ignored")
@@ -281,14 +292,16 @@ def run_platform(log_enabled: bool = False, interactive: bool = True) -> None:
         try:
             if algorithm == "AES-CBC":
                 # AE
-                enc_key  = session_key_bytes[:16]
+                enc_key = session_key_bytes[:16]
                 auth_key = session_key_bytes[16:]
                 plaintext = decrypt_aes_cbc(enc_key, auth_key, nonce, ciphertext, tag)
             elif algorithm == "AES-GCM":
                 # AEAD
                 aad = (device_id + "|" + timestamp).encode()
                 # Use full 32 bytes for GCM (matching device.py)
-                plaintext = decrypt_aead_aes_gcm(session_key_bytes, nonce, ciphertext, tag, aad)
+                plaintext = decrypt_aead_aes_gcm(
+                    session_key_bytes, nonce, ciphertext, tag, aad
+                )
             else:
                 _log(log_mode[0], "Algorithm type invalid")
                 return
@@ -317,7 +330,10 @@ def run_platform(log_enabled: bool = False, interactive: bool = True) -> None:
             for did, sk in session_keys.items():
                 if did in device_managers and not device_managers[did].session_key:
                     device_managers[did].set_session_key(sk, key_id=0)
-                    _log(log_mode[0], f"KeyManager initialized with DH session key for {did!r}")
+                    _log(
+                        log_mode[0],
+                        f"KeyManager initialized with DH session key for {did!r}",
+                    )
 
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
@@ -348,14 +364,22 @@ def run_platform(log_enabled: bool = False, interactive: bool = True) -> None:
                 did = input("Device ID: ").strip()
                 pin = input("PIN: ").strip()
                 alg = input("Algorithm ('AES-CBC' or 'AES-GCM'): ").strip()
-                if did and pin and alg:
+                dh = input(
+                    "Key exchange algorithm ('ecdh_ephemeral' or 'auth_dh'): "
+                ).strip()
+                if did and pin and alg and dh:
                     if did == ALLOWED_DEVICES_KEY_DEFAULT:
                         print("Cannot add key 'default'; it is reserved.")
                     elif alg not in POS_ALG:
                         print("Algorithm must be one of: " + str(POS_ALG))
+                    elif dh not in POS_DH:
+                        print("Key exchange algorithm must be one of: " + str(POS_DH))
                     else:
+                        # It is not necessary to save DH algorithm. We ask for them to verify all is correct only.
                         allowed_devices[did] = {"pin": pin, "alg": alg}
-                        print(f"Added device_id={did!r} with PIN and algorithm={alg!r}.")
+                        print(
+                            f"Added device_id={did!r} with PIN and algorithm={alg!r}."
+                        )
                 else:
                     print("Device ID, PIN and algorithm required.")
             elif choice == "2":
@@ -368,7 +392,9 @@ def run_platform(log_enabled: bool = False, interactive: bool = True) -> None:
                     session_keys.pop(did, None)
                     auth_keys.pop(did, None)
                     device_managers.pop(did, None)
-                    print(f"Removed device_id={did!r}. It can no longer pair or send data.")
+                    print(
+                        f"Removed device_id={did!r}. It can no longer pair or send data."
+                    )
                 else:
                     print(f"Unknown device_id={did!r}.")
             elif choice == "3":
@@ -378,7 +404,9 @@ def run_platform(log_enabled: bool = False, interactive: bool = True) -> None:
                 if session_keys:
                     for did, sk in session_keys.items():
                         ak = auth_keys.get(did, b"")
-                        print(f"  {did!r}: session_key={sk.hex()[:16]}...  auth_key={ak.hex()[:16]}...")
+                        print(
+                            f"  {did!r}: session_key={sk.hex()[:16]}...  auth_key={ak.hex()[:16]}..."
+                        )
                 else:
                     print("  No session keys established yet.")
             elif choice == "5":

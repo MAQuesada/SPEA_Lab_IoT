@@ -26,9 +26,9 @@ import paho.mqtt.client as mqtt
 from spea_lab_iot.key_agreement import KeyAgreement
 
 # Topics (inline to avoid circular import; also in config.py)
-TOPIC_DH_INIT     = "iot/dh/init"
+TOPIC_DH_INIT = "iot/dh/init"
 TOPIC_DH_RESPONSE = "iot/dh/response"
-TOPIC_DH_FINISH   = "iot/dh/finish"
+TOPIC_DH_FINISH = "iot/dh/finish"
 
 HANDSHAKE_TIMEOUT_SEC = 15
 
@@ -107,11 +107,13 @@ def run_dh_handshake(
     # ------------------------------------------------------------------ #
     # Step 2 — send init message                                           #
     # ------------------------------------------------------------------ #
-    init_payload = json.dumps({
-        "device_id": device_id,
-        "algorithm": algorithm,
-        "public_key": our_pub.hex(),
-    })
+    init_payload = json.dumps(
+        {
+            "device_id": device_id,
+            "algorithm": algorithm,
+            "public_key": our_pub.hex(),
+        }
+    )
     client.publish(TOPIC_DH_INIT, init_payload, qos=1)
     print(f"[dh] Sent DH init (algorithm={algorithm})")
 
@@ -135,10 +137,12 @@ def run_dh_handshake(
     finish_transcript = [device_id.encode(), peer_pub, our_pub]
     finish_hmac = ka.make_transcript_hmac(finish_transcript)
 
-    finish_payload = json.dumps({
-        "device_id": device_id,
-        "hmac_transcript": finish_hmac,
-    })
+    finish_payload = json.dumps(
+        {
+            "device_id": device_id,
+            "hmac_transcript": finish_hmac,
+        }
+    )
     client.publish(TOPIC_DH_FINISH, finish_payload, qos=1)
     print(f"[dh] Handshake complete. session_key={session_key.hex()[:16]}...")
 

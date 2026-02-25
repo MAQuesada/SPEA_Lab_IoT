@@ -38,9 +38,9 @@ import paho.mqtt.client as mqtt
 
 from spea_lab_iot.key_agreement import KeyAgreement
 
-TOPIC_DH_INIT     = "iot/dh/init"
+TOPIC_DH_INIT = "iot/dh/init"
 TOPIC_DH_RESPONSE = "iot/dh/response"
-TOPIC_DH_FINISH   = "iot/dh/finish"
+TOPIC_DH_FINISH = "iot/dh/finish"
 
 SUPPORTED_ALGORITHMS = {"auth_dh", "ecdh_ephemeral"}
 
@@ -55,9 +55,11 @@ class DHPlatformHandler:
 
     def __init__(
         self,
-        allowed_devices: dict[str, str],   # device_id -> pin
-        session_keys: dict[str, bytes],    # device_id -> session_key (shared with platform)
-        auth_keys: dict[str, bytes],       # device_id -> auth_key (for R5 AES-CBC-HMAC)
+        allowed_devices: dict[str, str],  # device_id -> pin
+        session_keys: dict[
+            str, bytes
+        ],  # device_id -> session_key (shared with platform)
+        auth_keys: dict[str, bytes],  # device_id -> auth_key (for R5 AES-CBC-HMAC)
         log: callable = print,
     ) -> None:
         self._allowed = allowed_devices
@@ -119,13 +121,17 @@ class DHPlatformHandler:
         transcript_parts = [device_id.encode(), peer_pub, our_pub]
         hmac_hex = ka.make_transcript_hmac(transcript_parts)
 
-        response = json.dumps({
-            "device_id": device_id,
-            "public_key": our_pub.hex(),
-            "hmac_transcript": hmac_hex,
-        })
+        response = json.dumps(
+            {
+                "device_id": device_id,
+                "public_key": our_pub.hex(),
+                "hmac_transcript": hmac_hex,
+            }
+        )
         client.publish(TOPIC_DH_RESPONSE, response, qos=1)
-        self._log(f"DH response sent to device_id={device_id!r} (algorithm={algorithm})")
+        self._log(
+            f"DH response sent to device_id={device_id!r} (algorithm={algorithm})"
+        )
 
         # Save pending state to verify finish
         self._pending[device_id] = {
