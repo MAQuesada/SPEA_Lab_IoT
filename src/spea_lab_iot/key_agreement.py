@@ -35,10 +35,13 @@ from cryptography.hazmat.primitives.asymmetric.x25519 import (
     X25519PublicKey,
 )
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from spea_lab_iot.config import (
+    SALT_AUTH,
+    SALT_SESS
+)
 
 # ---------------------------------------------------------------------------
 # DH classic (RFC 3526 – 2048-bit MODP group 14)
-# ---------------------------------------------------------------------------
 _DH_P = int(
     "FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1"
     "29024E088A67CC74020BBEA63B139B22514A08798E3404DD"
@@ -62,7 +65,7 @@ def _derive_auth_key(pin: str) -> bytes:
     return HKDF(
         algorithm=hashes.SHA256(),
         length=32,
-        salt=b"spea-lab-iot-auth",
+        salt=SALT_AUTH,
         info=b"auth-key-v1",
     ).derive(pin.encode())
 
@@ -72,13 +75,12 @@ def _hkdf_session(raw_shared: bytes) -> bytes:
     return HKDF(
         algorithm=hashes.SHA256(),
         length=32,
-        salt=b"spea-lab-iot-session",
+        salt=SALT_SESS,
         info=b"session-key-v1",
     ).derive(raw_shared)
 
 
 # ---------------------------------------------------------------------------
-# Abstract base
 # ---------------------------------------------------------------------------
 
 
@@ -88,7 +90,7 @@ class KeyAgreement(ABC):
     def __init__(self, pin: str) -> None:
         self._auth_key = _derive_auth_key(pin)
 
-    # -- factory -------------------------------------------------------------
+    # Factory -------------------------------------------------------------
 
     @staticmethod
     def create(algorithm: str, pin: str) -> "KeyAgreement":
@@ -105,7 +107,7 @@ class KeyAgreement(ABC):
         else:
             raise ValueError(f"Unknown algorithm: {algorithm!r}")
 
-    # -- abstract interface --------------------------------------------------
+    # Abstract interface --------------------------------------------------
 
     @abstractmethod
     def public_key_bytes(self) -> bytes:
@@ -115,7 +117,7 @@ class KeyAgreement(ABC):
     def derive_session_key(self, peer_public_key_bytes: bytes) -> bytes:
         """Compute the 32-byte shared session key from peer's public key bytes."""
 
-    # -- transcript HMAC (shared implementation) ----------------------------
+    # Transcript HMAC (shared implementation) ----------------------------
 
     def make_transcript_hmac(self, parts: list[bytes]) -> str:
         """
@@ -141,11 +143,7 @@ class KeyAgreement(ABC):
         return hmac.compare_digest(expected, received_hex)
 
 
-# ---------------------------------------------------------------------------
-# DH classic implementation
-# ---------------------------------------------------------------------------
-
-
+# -----------------------DH classic implementation------------------------
 class _DHKeyAgreement(KeyAgreement):
     """Classic Diffie-Hellman using RFC 3526 2048-bit MODP group."""
 
@@ -168,11 +166,7 @@ class _DHKeyAgreement(KeyAgreement):
         return _hkdf_session(raw)
 
 
-# ---------------------------------------------------------------------------
-# ECDH ephemeral (X25519)
-# ---------------------------------------------------------------------------
-
-
+# -----------------ECDH ephemeral (X25519)-------------------------------
 class _ECDHKeyAgreement(KeyAgreement):
     """Ephemeral ECDH using X25519 (32-byte keys, fast, modern)."""
 

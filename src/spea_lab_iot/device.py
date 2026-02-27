@@ -230,9 +230,7 @@ def run_device(
         )
         client.publish(TOPIC_ENROLL, payload, qos=1)
 
-    # ---------------------------------------------------------------------- #
-    # Phase 1 — Enrollment (R1)                                               #
-    # ---------------------------------------------------------------------- #
+    # 1. Enrollment (R1)
     if ui_mode == "keypad":
         send_pairing()
         if not enrolled_event.wait(timeout=ENROLL_WAIT_TIMEOUT_SEC):
@@ -245,9 +243,7 @@ def run_device(
             send_pairing()
             enrolled_event.wait(timeout=PAIRING_RETRY_SEC)
 
-    # ---------------------------------------------------------------------- #
-    # Phase 2 — Key agreement (R4)                                            #
-    # ---------------------------------------------------------------------- #
+    # 2. Key agreement (R4)
     print(f"Enrolled. Starting DH key agreement (algorithm={ka_algorithm})...")
     try:
         session_key, auth_key = run_dh_handshake(
@@ -262,14 +258,12 @@ def run_device(
         client.disconnect()
         sys.exit(1)
 
-    # R2-R3: initialize KeyManager with DH-derived session key
+    # Initialize KeyManager with DH-derived session key (R2 and R3)
     key_mgr.set_session_key(session_key, key_id=0)
     print(f"Session key established: {session_key.hex()[:16]}...")
     print(f"Auth key established:    {auth_key.hex()[:16]}...")
 
-    # ---------------------------------------------------------------------- #
-    # Phase 3 — Data publishing (R5)                                          #
-    # ---------------------------------------------------------------------- #
+    # 3. Data publishing (R5)
     data_topic = data_topic_ref[0] or TOPIC_DATA
     print(f"Publishing data to {data_topic} (Ctrl+C to stop)")
 

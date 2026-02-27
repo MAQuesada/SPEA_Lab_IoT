@@ -6,6 +6,8 @@ from Crypto.Hash import SHA256
 from Crypto.Protocol.KDF import PBKDF2
 from Crypto.Random import get_random_bytes
 
+from spea_lab_iot.config import SALT_KM
+
 
 class KeyManager:
     """
@@ -35,7 +37,7 @@ class KeyManager:
 
         self.storage_dir.mkdir(parents=True, exist_ok=True)
 
-    def derive_master_key(self, pin: str, salt: bytes = b"iot-mock-salt") -> bytes:
+    def derive_master_key(self, pin: str, salt: bytes = SALT_KM) -> bytes:
         """Derives a master key (authentication key) from the PIN."""
         # Using the same parameters as the original code
         key = PBKDF2(

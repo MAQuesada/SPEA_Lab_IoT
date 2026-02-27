@@ -10,24 +10,6 @@ The platform handles incoming DH init messages and completes the handshake:
   6. Verify device HMAC (mutual authentication)
   7. Store session_key in session_keys dict: device_id -> session_key
 
-Integration in platform.py:
-    from spea_lab_iot.dh_platform import DHPlatformHandler
-
-    dh_handler = DHPlatformHandler(
-        allowed_devices=allowed_devices,   # dict[device_id -> pin]
-        session_keys=session_keys,         # dict[device_id -> bytes]  (you create this)
-        log=lambda msg: _log(log_mode[0], msg),
-    )
-
-    # In on_connect, subscribe to DH topics:
-    client.subscribe(TOPIC_DH_INIT, qos=1)
-    client.subscribe(TOPIC_DH_FINISH, qos=1)
-
-    # In on_message, dispatch:
-    elif msg.topic == TOPIC_DH_INIT:
-        dh_handler.on_dh_init(client, msg)
-    elif msg.topic == TOPIC_DH_FINISH:
-        dh_handler.on_dh_finish(client, msg)
 """
 
 from __future__ import annotations
@@ -69,9 +51,7 @@ class DHPlatformHandler:
         # pending handshakes: device_id -> {ka, our_pub, peer_pub}
         self._pending: dict[str, dict] = {}
 
-    # ------------------------------------------------------------------ #
-    # Step 1 — receive DH init from device                                 #
-    # ------------------------------------------------------------------ #
+    # 1. Receive DH init from device
     def on_dh_init(self, client: mqtt.Client, msg: mqtt.MQTTMessage) -> None:
         try:
             payload = json.loads(msg.payload.decode())
@@ -99,25 +79,18 @@ class DHPlatformHandler:
 
         peer_pub = bytes.fromhex(peer_pub_hex)
 
-        # ---------------------------------------------------------------- #
-        # Step 2 — generate our ephemeral key pair                          #
-        # ---------------------------------------------------------------- #
+        # 2. Generate our ephemeral key pair
         ka = KeyAgreement.create(algorithm, pin)
         our_pub = ka.public_key_bytes()
 
-        # ---------------------------------------------------------------- #
-        # Step 3 — derive session key                                       #
-        # ---------------------------------------------------------------- #
+        # 3. Derive session key
         try:
             session_key = ka.derive_session_key(peer_pub)
         except ValueError as e:
             self._log(f"DH key derivation error for {device_id!r}: {e}")
             return
 
-        # ---------------------------------------------------------------- #
-        # Step 4 — compute HMAC and send response                           #
-        # transcript = device_id | peer_pub | our_pub                       #
-        # ---------------------------------------------------------------- #
+        # 4. Compute HMAC and send response
         transcript_parts = [device_id.encode(), peer_pub, our_pub]
         hmac_hex = ka.make_transcript_hmac(transcript_parts)
 
@@ -141,9 +114,7 @@ class DHPlatformHandler:
             "session_key": session_key,
         }
 
-    # ------------------------------------------------------------------ #
-    # Step 5 — receive DH finish from device                               #
-    # ------------------------------------------------------------------ #
+    # 5. Receive DH finish from device
     def on_dh_finish(self, client: mqtt.Client, msg: mqtt.MQTTMessage) -> None:
         try:
             payload = json.loads(msg.payload.decode())
@@ -167,10 +138,7 @@ class DHPlatformHandler:
         our_pub: bytes = pending["our_pub"]
         peer_pub: bytes = pending["peer_pub"]
 
-        # ---------------------------------------------------------------- #
-        # Step 6 — verify device HMAC (mutual authentication)               #
-        # transcript = device_id | our_pub | peer_pub  (device perspective) #
-        # ---------------------------------------------------------------- #
+        # 6. Verify device HMAC (mutual authentication)
         finish_transcript = [device_id.encode(), our_pub, peer_pub]
         if not ka.verify_transcript_hmac(finish_transcript, hmac_received):
             self._log(
@@ -179,9 +147,7 @@ class DHPlatformHandler:
             del self._pending[device_id]
             return
 
-        # ---------------------------------------------------------------- #
-        # Step 7 — store session key                                        #
-        # ---------------------------------------------------------------- #
+        # 7. Store session key
         session_key: bytes = pending["session_key"]
         self._session_keys[device_id] = session_key
         self._auth_keys[device_id] = ka.auth_key_bytes()
