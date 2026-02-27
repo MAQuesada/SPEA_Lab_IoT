@@ -5,6 +5,7 @@ description = "SPEA Lab IoT project"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "cryptography>=46.0.5",
     "paho-mqtt>=2.0",
     "pycryptodome>=3.23.0",
     "python-dotenv>=1.0",
@@ -25,3 +26,6 @@ packages = ["src/spea_lab_iot", "src/mqtt_demo"]
 [tool.ruff]
 line-length = 88
 target-version = "py311"
+
+[dependency-groups]
+dev = []
