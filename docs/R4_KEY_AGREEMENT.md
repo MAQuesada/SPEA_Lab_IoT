@@ -11,7 +11,7 @@ To ensure that the session keys used for data encryption are established securel
 | **`ecdh_ephemeral`** | ECDH (P-256), ephemeral | HMAC transcript | `session_key` and `auth_key` |
 | **`auth_dh`** | DH + PIN | HMAC transcript + PIN | `session_key` and `auth_key` |
 
-The default algorithm for all devices is `ecdh_ephemeral`. It is selected when the operator adds the device on the platform.
+On keyboard devices, the user chooses the key agreement algorithm between `ecdh_ephemeral` or `auth_dh` after selecting the encryption algorithm. However, on screen devices, the algorithm is chosen randomly.
 
 ---
 

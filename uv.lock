@@ -218,6 +218,7 @@ name = "spea-lab-iot"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "cryptography" },
     { name = "paho-mqtt" },
     { name = "pycryptodome" },
     { name = "python-dotenv" },
@@ -228,13 +229,9 @@ dev = [
     { name = "ruff" },
 ]
 
-[package.dev-dependencies]
-dev = [
-    { name = "cryptography" },
-]
-
 [package.metadata]
 requires-dist = [
+    { name = "cryptography", specifier = ">=46.0.5" },
     { name = "paho-mqtt", specifier = ">=2.0" },
     { name = "pycryptodome", specifier = ">=3.23.0" },
     { name = "python-dotenv", specifier = ">=1.0" },
@@ -243,4 +240,4 @@ requires-dist = [
 provides-extras = ["dev"]
 
 [package.metadata.requires-dev]
-dev = [{ name = "cryptography", specifier = ">=46.0.5" }]
+dev = []
