@@ -1,8 +1,6 @@
 """
 Enrollable device: pairing (keypad or screen mode) then publish sensor data.
-
-Keypad: user enters platform PIN; device sends pairing once and waits for enrollment.
-Screen: device displays its ID and PIN, retries pairing until enrolled.
+Resilience added: handles revocation from the platform gracefully and auto-regenerates PINs.
 """
 
 import base64
@@ -25,15 +23,15 @@ from spea_lab_iot.config import (
     TOPIC_ENROLL_RESPONSE,
     TOPIC_REKEY,
     TOPIC_REKEY_RESPONSE,
+    TOPIC_ADMIN_REMOVE,
 )
 from spea_lab_iot.key_manager import KeyManager
+from spea_lab_iot.dh_device import run_dh_handshake
 
-# imports related to cryptography
 from Crypto.Random import get_random_bytes
 from Crypto.Cipher import AES
 from Crypto.Hash import HMAC, SHA256
-from Crypto.Util.Padding import pad, unpad
-from Crypto.Protocol.KDF import PBKDF2
+from Crypto.Util.Padding import pad
 
 # Sensor simulation (baseline + deviation)
 BASELINE_TEMPERATURE_C = 24.0
@@ -48,279 +46,276 @@ DATA_INTERVAL_SEC = 5
 PAIRING_RETRY_SEC = 3
 ENROLL_WAIT_TIMEOUT_SEC = 30
 
-# Choose mode of Cryptography (maybe can be determinated by user using the platform)
-# ALGORITHM = 'AES-CBC'
-ALGORITHM = "AES-GCM"
 POS_ALG = ["AES-CBC", "AES-GCM"]
-
-
-# ==================================================================================================
-
-
-
-# ==================================================================================================
-
+POS_DH = ["ecdh_ephemeral", "auth_dh"]
 
 def _read_temperature() -> float:
-    value = BASELINE_TEMPERATURE_C + random.uniform(
-        -TEMPERATURE_DEVIATION, TEMPERATURE_DEVIATION
-    )
+    value = BASELINE_TEMPERATURE_C + random.uniform(-TEMPERATURE_DEVIATION, TEMPERATURE_DEVIATION)
     return round(max(TEMP_MIN, min(TEMP_MAX, value)), 1)
 
-
 def _read_humidity() -> float:
-    value = BASELINE_HUMIDITY_PCT + random.uniform(
-        -HUMIDITY_DEVIATION, HUMIDITY_DEVIATION
-    )
+    value = BASELINE_HUMIDITY_PCT + random.uniform(-HUMIDITY_DEVIATION, HUMIDITY_DEVIATION)
     return round(max(HUMIDITY_MIN, min(HUMIDITY_MAX, value)), 1)
 
-
-# ---------------------------FUNCTIONS RELATED TO CRYPTOGRAPHY------------------
-# Function to encrypt data using AEAD.
 def encrypt_aead_aes_gcm(key: bytes, plaintext: bytes, aad: bytes):
     cipher = AES.new(key, AES.MODE_GCM)
     cipher.update(aad)
     ciphertext, tag = cipher.encrypt_and_digest(plaintext)
-
     return cipher.nonce, ciphertext, tag
 
-
-# Function to encrypt using AE
 def encrypt_aes_cbc_hmac(enc_key: bytes, mac_key: bytes, plaintext: bytes):
     iv = get_random_bytes(16)
-
-    # Create the cipher and encript it
     cipher = AES.new(enc_key, AES.MODE_CBC, iv)
     ciphertext = cipher.encrypt(pad(plaintext, AES.block_size))
-
-    # Added hmac
     h = HMAC.new(mac_key, digestmod=SHA256)
     h.update(iv + ciphertext)
     tag = h.digest()
-
     return iv, ciphertext, tag
-
-
-# ---------------------------------------------------------------------------
-
 
 def run_device(
     sensor_id: str,
     ui_mode: str,
-    pin: str,
+    pin: str | None = None,
     alg: str | None = None,
+    ka_algorithm: str | None = None,
 ) -> None:
-    """
-    Run device: pair with platform then publish temperature/humidity.
+    
+    running_global = True
 
-    ui_mode: "keypad" (user enters platform PIN) or "screen" (device shows ID and PIN, retries until enrolled).
-    pin: for keypad, pass None and user will be prompted; for screen, pass the PIN (e.g. from env in device_screen.py).
-    """
-    if ui_mode == "keypad":
-        # If PIN or algorithm not provided, prompt interactively
-        if pin is None:
-            pin = input("Enter platform code: ").strip()
-        if alg is None:
-            alg = input("Enter encrypted algorithm (AES-CBC or AES-GCM): ").strip()
-        if not pin:
-            print("PIN required.", file=sys.stderr)
-            sys.exit(1)
-        if not alg or alg not in POS_ALG:
-            print("Algorithm required. Options: " + str(POS_ALG), file=sys.stderr)
-            sys.exit(1)
+    def stop_global(_: int, __: object | None) -> None:
+        nonlocal running_global
+        running_global = False
 
-    elif ui_mode == "screen":
-        if not pin:
-            print(
-                "Screen device requires a PIN (pass pin= or set DEVICE_PAIRING_CODE in device_screen).",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        if not alg:
-            print("Screen device requires an encrypted algorithm", file=sys.stderr)
-        print(f"Device ID: {sensor_id}")
-        print(f"PIN: {pin}")
-        print(f"Encrypted algorithm: {alg}")
-        print("Attempting pairing until enrolled...")
-    else:
-        print("ui_mode must be 'keypad' or 'screen'.", file=sys.stderr)
-        sys.exit(1)
+    signal.signal(signal.SIGINT, stop_global)
 
-    key_mgr = KeyManager(sensor_id)
-    key_mgr.derive_master_key(pin)
-    if not key_mgr.load_keys():
-        print("No previous keys found or failed to load. Waiting for enrollment/rekey.")
+    while running_global:
+        current_pin = pin
+        current_alg = alg
+        current_ka = ka_algorithm
 
-    enrolled_event = threading.Event()
-    data_topic_ref: list[str | None] = [None]
+        # ==========================================
+        # 1. INTERFAZ DE USUARIO (KEYPAD vs SCREEN)
+        # ==========================================
+        if ui_mode == "keypad":
+            if current_pin is None:
+                print(f"\n[{sensor_id}] Esperando credenciales...")
+                current_pin = input("Enter platform code: ").strip()
+            if current_alg is None:
+                current_alg = input("Enter encrypted algorithm (AES-CBC or AES-GCM): ").strip()
+            if current_ka is None:
+                current_ka = input("Enter key exchange algorithm (ecdh_ephemeral or auth_dh): ").strip()
 
-    def on_connect(
-        client: mqtt.Client,
-        userdata: object,
-        flags: dict,
-        reason_code: int,
-        properties: object | None = None,
-    ) -> None:
-        if reason_code == 0:
-            client.subscribe(TOPIC_ENROLL_RESPONSE, qos=1)
-            client.subscribe(TOPIC_REKEY_RESPONSE, qos=1)
-
-    def on_message(
-        client: mqtt.Client, userdata: object, msg: mqtt.MQTTMessage
-    ) -> None:
-        if msg.topic == TOPIC_REKEY_RESPONSE:
-            try:
-                payload = json.loads(msg.payload.decode())
-                if payload.get("device_id") != sensor_id:
-                    return
+            if not current_pin or not current_alg or not current_ka:
+                print("❌ Faltan datos. Reiniciando...", file=sys.stderr)
+                pin, alg, ka_algorithm = None, None, None
+                continue
                 
-                # Decrypt new session key
-                nonce = base64.b64decode(payload["nonce"])
-                tag = base64.b64decode(payload["tag"])
-                ciphertext = base64.b64decode(payload["ciphertext"])
-                key_id = payload["key_id"]
+        elif ui_mode == "screen":
+            if not current_pin or not current_alg or not current_ka:
+                print("\n🔄 Generando nuevo PIN de conexión seguro...")
+                current_pin = str(random.randint(100000, 999999))
+                current_alg = random.choice(POS_ALG)
+                current_ka = random.choice(POS_DH)
                 
-                cipher = AES.new(key_mgr.master_key, AES.MODE_GCM, nonce=nonce)
-                new_session_key = cipher.decrypt_and_verify(ciphertext, tag)
-                
-                key_mgr.set_session_key(new_session_key, key_id)
-                print(f"Key rotation successful. New Key ID: {key_id}")
-                
-            except Exception as e:
-                print(f"Error handling rekey response: {e}")
-            return
+            print(f"\n=================================")
+            print(f"📱 MODO SCREEN - ID: {sensor_id}")
+            print(f"🔑 NUEVO PIN: {current_pin}")
+            print(f"🔒 Algoritmo Cifrado: {current_alg}")
+            print(f"=================================")
+            print("⏳ Intentando conectar con la Plataforma ...")
 
-        if msg.topic != TOPIC_ENROLL_RESPONSE:
-            return
+        key_mgr = KeyManager(sensor_id)
+       
+        key_mgr.load_keys() 
+        
+        key_mgr.derive_master_key(current_pin)
+
+        enrolled_event = threading.Event()
+        revoked_event = threading.Event() 
+        data_topic_ref: list[str | None] = [None]
+
+        def on_connect(client, userdata, flags, reason_code, properties=None):
+            if reason_code == 0:
+                client.subscribe(TOPIC_ENROLL_RESPONSE, qos=1)
+                client.subscribe(TOPIC_REKEY_RESPONSE, qos=1)
+                client.subscribe(TOPIC_ADMIN_REMOVE, qos=1) 
+
+        def on_message(client, userdata, msg):
+            if msg.topic == TOPIC_ADMIN_REMOVE:
+                try:
+                    payload = json.loads(msg.payload.decode())
+                    if payload.get("device_id") == sensor_id:
+                        print("\n[!] ALERTA: La plataforma ha eliminado este dispositivo.")
+                        revoked_event.set()
+                except Exception:
+                    pass
+                return
+
+            if msg.topic == TOPIC_REKEY_RESPONSE:
+                try:
+                    payload = json.loads(msg.payload.decode())
+                    if payload.get("device_id") != sensor_id: return
+                    nonce = base64.b64decode(payload["nonce"])
+                    tag = base64.b64decode(payload["tag"])
+                    ciphertext = base64.b64decode(payload["ciphertext"])
+                    key_id = payload["key_id"]
+                    cipher = AES.new(key_mgr.master_key, AES.MODE_GCM, nonce=nonce)
+                    new_session_key = cipher.decrypt_and_verify(ciphertext, tag)
+                    key_mgr.set_session_key(new_session_key, key_id)
+                    print(f"✅ Key rotation successful. New Key ID: {key_id}")
+                except Exception as e:
+                    print(f"Error handling rekey response: {e}")
+                return
+
+            if msg.topic == TOPIC_ENROLL_RESPONSE:
+                try:
+                    payload = json.loads(msg.payload.decode())
+                    if payload.get("device_id") == sensor_id and payload.get("status") == "enrolled":
+                        data_topic_ref[0] = payload.get("data_topic", TOPIC_DATA)
+                        enrolled_event.set()
+                except Exception:
+                    pass
+
+        client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+        client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
+        client.on_connect = on_connect
+        client.on_message = on_message
+
         try:
-            payload = json.loads(msg.payload.decode())
-            print(f"Payload: {payload}")
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            return
-        if payload.get("device_id") != sensor_id or payload.get("status") != "enrolled":
-            return
-        data_topic_ref[0] = payload.get("data_topic", TOPIC_DATA)
-        enrolled_event.set()
+            client.connect(MQTT_BROKER_HOST, MQTT_BROKER_PORT, keepalive=60)
+        except Exception as e:
+            print(f"Could not connect: {e}", file=sys.stderr)
+            sys.exit(1)
 
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
-    client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
-    client.on_connect = on_connect
-    client.on_message = on_message
+        client.loop_start()
 
-    try:
-        client.connect(MQTT_BROKER_HOST, MQTT_BROKER_PORT, keepalive=60)
-    except Exception as e:
-        print(f"Could not connect: {e}", file=sys.stderr)
-        sys.exit(1)
+        def send_pairing() -> None:
+            payload = json.dumps({"action": "pairing", "device_id": sensor_id, "pin": current_pin, "alg": current_alg})
+            client.publish(TOPIC_ENROLL, payload, qos=1)
 
-    client.loop_start()
+        # ==========================================
+        # 2. PROCESO DE ENROLAMIENTO
+        # ==========================================
+        if ui_mode == "keypad":
+            send_pairing()
+            if not enrolled_event.wait(timeout=5):
+                print("\n❌ ERROR: Acceso denegado o PIN incorrecto.")
+                print("👉 Verifica los datos en el Dashboard Web e inténtalo de nuevo.\n")
+                client.loop_stop()
+                client.disconnect()
+                pin, alg, ka_algorithm = None, None, None
+                continue
+        else:
+            while not enrolled_event.is_set() and running_global and not revoked_event.is_set():
+                send_pairing()
+                enrolled_event.wait(timeout=PAIRING_RETRY_SEC)
 
-    def send_pairing() -> None:
-        payload = json.dumps(
-            {"action": "pairing", "device_id": sensor_id, "pin": pin, "alg": alg}
-        )
-        client.publish(TOPIC_ENROLL, payload, qos=1)
-
-    # Pairing phase
-    if ui_mode == "keypad":
-        send_pairing()
-        if not enrolled_event.wait(timeout=ENROLL_WAIT_TIMEOUT_SEC):
-            print("Enrollment timeout. Check platform and PIN.", file=sys.stderr)
+        if not running_global or revoked_event.is_set():
             client.loop_stop()
             client.disconnect()
-            sys.exit(1)
-    else:
-        while not enrolled_event.is_set():
-            send_pairing()
-            enrolled_event.wait(timeout=PAIRING_RETRY_SEC)
-
-    data_topic = data_topic_ref[0] or TOPIC_DATA
-    print(f"Enrolled. Publishing data to {data_topic} (Ctrl+C to stop)")
-
-    running = True
-
-    def stop(_: int, __: object | None) -> None:
-        nonlocal running
-        running = False
-
-    signal.signal(signal.SIGINT, stop)
-
-    while running:
-        # Check if we need to rotate keys
-        if key_mgr.check_rotation_needed():
-            timestamp = str(int(time.time()))
-            payload_dict = {"device_id": sensor_id, "ts": timestamp}
-            # Authenticate rekey request with Master Key
-            h = HMAC.new(key_mgr.master_key, digestmod=SHA256)
-            h.update(json.dumps(payload_dict, sort_keys=True).encode())
-            payload_dict["sig"] = base64.b64encode(h.digest()).decode()
-
-            client.publish(TOPIC_REKEY, json.dumps(payload_dict), qos=1)
-            print("Invoked key rotation...")
-
-            # Always wait for the new key before publishing,
-            # regardless of whether we had an existing session key.
-            # If we published with the old key while the platform already
-            # switched to the new one, AES-GCM MAC check would fail.
-            time.sleep(2)
+            pin, alg, ka_algorithm = None, None, None
             continue
 
-        temperature = _read_temperature()
-        humidity = _read_humidity()
-        payload = {
-            "device_id": sensor_id, 
-            "temperature": temperature,
-            "humidity": humidity,
-            "unit_temp": "celsius",
-            "unit_humidity": "%",
-        }
-
-        # Convert to plaintext
-        plaintext = json.dumps(payload).encode()
-
-        # Obtain some metadata
-        timestamp = str(int(time.time()))
-        aad = (sensor_id + "|" + timestamp).encode()
-
+        # ==========================================
+        # 3. INTERCAMBIO DE CLAVES Y ENVÍO DE DATOS
+        # ==========================================
+        print(f"Enrolled. Starting DH key agreement (algorithm={current_ka})...")
         try:
-            session_key_bytes, key_id = key_mgr.get_session_key()
-            
-            if alg == "AES-CBC":
-                # Split 32-byte key into 16 enc + 16 auth
-                enc_key = session_key_bytes[:16]
-                auth_key = session_key_bytes[16:]
-                nonce, ciphertext, tag = encrypt_aes_cbc_hmac(
-                    enc_key, auth_key, plaintext
-                )
-            elif alg == "AES-GCM":
-                # Use full 32-byte key for AES-256-GCM
-                nonce, ciphertext, tag = encrypt_aead_aes_gcm(session_key_bytes, plaintext, aad)
-            else:
-                print("ERROR: unknown algorithm", file=sys.stderr)
-                sys.exit(1)
+            session_key, auth_key = run_dh_handshake(
+                client=client, device_id=sensor_id, pin=current_pin, algorithm=current_ka
+            )
+        except RuntimeError as e:
+            print(f"Key agreement failed: {e}", file=sys.stderr)
+            client.loop_stop()
+            client.disconnect()
+            pin, alg, ka_algorithm = None, None, None
+            continue
 
-            # Create new payload
-            encrypted_payload = {
-                "device_id": sensor_id,
-                "key_id": key_id,
-                "nonce": base64.b64encode(nonce).decode(),
-                "ciphertext": base64.b64encode(ciphertext).decode(),
-                "tag": base64.b64encode(tag).decode(),
-                "alg": alg,
-                "ts": timestamp,
+        key_mgr.set_session_key(session_key, key_id=0)
+        
+        data_topic = data_topic_ref[0] or TOPIC_DATA
+        print(f"Publishing data to {data_topic} (Ctrl+C to stop)")
+
+        rekey_attempts = 0  # Contador de intentos para la resiliencia
+
+        while running_global and not revoked_event.is_set():
+            
+            # --- ZONA DE ROTACIÓN DE CLAVES ---
+            if key_mgr.check_rotation_needed():
+                if rekey_attempts >= 3:
+                    print("\n[!] ALERTA: La plataforma no responde.")
+                    print("Asumiendo que el dispositivo ha sido ELIMINADO de la red.")
+                    revoked_event.set()
+                    continue
+
+                timestamp = str(int(time.time()))
+                payload_dict = {"device_id": sensor_id, "ts": timestamp}
+                h = HMAC.new(key_mgr.master_key, digestmod=SHA256)
+                h.update(json.dumps(payload_dict, sort_keys=True).encode())
+                payload_dict["sig"] = base64.b64encode(h.digest()).decode()
+
+                client.publish(TOPIC_REKEY, json.dumps(payload_dict), qos=1)
+                print(f"🔄 Invoked key rotation... (Intento {rekey_attempts + 1}/3)")
+                rekey_attempts += 1
+                
+                # Esperamos 5 segundos a que la plataforma responda antes de intentar de nuevo
+                for _ in range(5):
+                    if revoked_event.is_set(): break
+                    time.sleep(1)
+                continue
+                
+            # Si llegamos aquí, no necesitamos rotar o la rotación fue exitosa
+            rekey_attempts = 0
+
+            # --- ZONA DE ENVÍO DE DATOS ---
+            temperature = _read_temperature()
+            humidity = _read_humidity()
+            payload = {
+                "device_id": sensor_id, "temperature": temperature,
+                "humidity": humidity, "unit_temp": "celsius", "unit_humidity": "%",
             }
 
-            client.publish(data_topic, json.dumps(encrypted_payload), qos=1)
-            print(
-                f"Published: device_id={sensor_id!r}, temp={temperature}°C, humidity={humidity}%"
-            )
-            print(f"Encrypted message: {encrypted_payload}")
-            
-        except ValueError as e:
-            print(f"Waiting for key... ({e})")
-            
-        time.sleep(DATA_INTERVAL_SEC)
+            plaintext = json.dumps(payload).encode()
+            timestamp = str(int(time.time()))
+            aad = (sensor_id + "|" + timestamp).encode()
 
-    client.loop_stop()
-    client.disconnect()
+            try:
+                session_key_bytes, key_id = key_mgr.get_session_key()
+
+                if current_alg == "AES-CBC":
+                    enc_key = session_key_bytes[:16]
+                    auth_key = session_key_bytes[16:]
+                    nonce, ciphertext, tag = encrypt_aes_cbc_hmac(enc_key, auth_key, plaintext)
+                elif current_alg == "AES-GCM":
+                    nonce, ciphertext, tag = encrypt_aead_aes_gcm(session_key_bytes, plaintext, aad)
+
+                encrypted_payload = {
+                    "device_id": sensor_id, "key_id": key_id, "nonce": base64.b64encode(nonce).decode(),
+                    "ciphertext": base64.b64encode(ciphertext).decode(), "tag": base64.b64encode(tag).decode(),
+                    "alg": current_alg, "ts": timestamp,
+                }
+
+                client.publish(data_topic, json.dumps(encrypted_payload), qos=1)
+                print(f"Published: device_id={sensor_id!r}, temp={temperature}°C, humidity={humidity}%")
+
+            except ValueError as e:
+                print(f"Waiting for key... ({e})")
+
+            # Pausa entre envíos de datos
+            for _ in range(DATA_INTERVAL_SEC):
+                if revoked_event.is_set() or not running_global: break
+                time.sleep(1)
+
+        client.loop_stop()
+        client.disconnect()
+
+        # SI FUE ELIMINADO POR LA WEB O POR TIMEOUT, LIMPIAMOS Y REINICIAMOS
+        if revoked_event.is_set():
+            print("\n===========================================")
+            print("🔌 CONEXIÓN CERRADA.")
+            print("Preparando dispositivo para una nueva conexión...")
+            print("===========================================\n")
+            pin, alg, ka_algorithm = None, None, None
+            time.sleep(2)
+
     print("Device stopped.")
