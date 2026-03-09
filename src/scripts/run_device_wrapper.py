@@ -22,14 +22,16 @@ load_dotenv()
 from spea_lab_iot.device import run_device
 
 POS_ALG = ["AES-CBC", "AES-GCM"]
+POS_DH = ["ecdh_ephemeral", "auth_dh"]
 
 DEVICE_OPTIONS = [
     {
         "label": "Keypad device (sensor-keypad-01) — you enter the platform PIN and algorithm",
         "sensor_id": "sensor-keypad-01",
         "mode": "keypad",
-        "pin": None,   # Will be prompted interactively inside run_device
-        "alg": None,   # Will be prompted interactively inside run_device
+        "pin": None,  # Will be prompted interactively inside run_device
+        "alg": None,  # Will be prompted interactively inside run_device
+        "dh": None,  # Will be prompted interactively inside run_device
     },
     {
         "label": "Screen device (sensor-screen-01) — random PIN and algorithm, retries until enrolled",
@@ -37,6 +39,7 @@ DEVICE_OPTIONS = [
         "mode": "screen",
         "pin": str(random.randint(100000, 999999)),
         "alg": random.choice(POS_ALG),
+        "dh": random.choice(POS_DH),
     },
 ]
 
@@ -52,7 +55,9 @@ def main() -> None:
         choice = input(f"Choice [1-{len(DEVICE_OPTIONS)}]: ").strip()
         if choice.isdigit() and 1 <= int(choice) <= len(DEVICE_OPTIONS):
             break
-        print(f"  Invalid choice. Please enter a number between 1 and {len(DEVICE_OPTIONS)}.")
+        print(
+            f"  Invalid choice. Please enter a number between 1 and {len(DEVICE_OPTIONS)}."
+        )
 
     selected = DEVICE_OPTIONS[int(choice) - 1]
 
@@ -61,6 +66,7 @@ def main() -> None:
         print(f"  Device ID : {selected['sensor_id']}")
         print(f"  PIN       : {selected['pin']}")
         print(f"  Algorithm : {selected['alg']}")
+        print(f"  Exchange algorithm : {selected['dh']}")
         print("  Add this device on the platform before it can pair.\n")
 
     run_device(
@@ -68,6 +74,7 @@ def main() -> None:
         ui_mode=selected["mode"],
         pin=selected["pin"],
         alg=selected["alg"],
+        ka_algorithm=selected["dh"],
     )
 
 
