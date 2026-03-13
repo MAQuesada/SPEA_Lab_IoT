@@ -1,5 +1,6 @@
 """
 Subscriber to iot/feed: receives data relayed by the platform (includes device_id).
+Subscriber to iot/data: receives RAW encrypted data to demonstrate R5 encryption.
 """
 
 from dotenv import load_dotenv
@@ -17,6 +18,7 @@ from spea_lab_iot.config import (
     MQTT_PASSWORD,
     MQTT_USER,
     TOPIC_FEED,
+    TOPIC_DATA,  # Añadimos el canal de datos crudos
 )
 
 
@@ -29,22 +31,37 @@ def on_connect(
 ) -> None:
     if reason_code == 0:
         print(f"Connected to broker {MQTT_BROKER_HOST}")
+        # Nos suscribimos a ambos canales
         client.subscribe(TOPIC_FEED, qos=1)
-        print(f"Subscribed to topic '{TOPIC_FEED}' (Ctrl+C to stop)\n")
+        client.subscribe(TOPIC_DATA, qos=1)
+        
+        print(f"🎧 Subscribed to public channel (RAW Encrypted): '{TOPIC_DATA}'")
+        print(f"✅ Subscribed to private channel (Decrypted Feed): '{TOPIC_FEED}'")
+        print("(Ctrl+C to stop)\n")
+        print("-" * 70)
     else:
         print(f"Connection failed: {reason_code}", file=sys.stderr)
 
 
 def on_message(client: mqtt.Client, userdata: object, msg: mqtt.MQTTMessage) -> None:
     try:
-        payload = json.loads(msg.payload.decode())
-        device_id = payload.get("device_id", "?")
-        temp = payload.get("temperature", "?")
-        humidity = payload.get("humidity", "?")
-        print(
-            f"Received: device_id={device_id!r}, temperature={temp}°C, humidity={humidity}%"
-        )
-        print(f"  Raw payload: {payload}")
+        payload_str = msg.payload.decode()
+        
+        if msg.topic == TOPIC_DATA:
+            # Requisito R5: Mostramos la basura ininteligible que viaja por la red
+            print(f"🔒 [iot/data RAW] -> {payload_str}")
+            
+        elif msg.topic == TOPIC_FEED:
+            # Datos limpios y descifrados tras pasar por la Plataforma (Gateway)
+            payload = json.loads(payload_str)
+            device_id = payload.get("device_id", "?")
+            temp = payload.get("temperature", "?")
+            humidity = payload.get("humidity", "?")
+            print(
+                f"🟢 [iot/feed CLEAR] -> device_id={device_id!r}, temperature={temp}°C, humidity={humidity}%"
+            )
+            print("-" * 70)
+            
     except (json.JSONDecodeError, UnicodeDecodeError) as e:
         print(f"Received (raw): {msg.payload!r} (parse error: {e})")
 

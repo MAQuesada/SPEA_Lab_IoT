@@ -50,8 +50,8 @@ def on_message(client, userdata, msg):
 
             shared_state["sensor_data"].append(data)
             
-            # Mantenemos un histórico de 50 puntos para que la gráfica fluya
-            if len(shared_state["sensor_data"]) > 50:
+        
+            if len(shared_state["sensor_data"]) > 100:
                 shared_state["sensor_data"].pop(0)
         except Exception as e:
             print(f"Error procesando feed: {e}")
@@ -118,30 +118,40 @@ with tab1:
 with tab2:
     st.subheader("📊 Monitor de Telemetría en Tiempo Real")
     
-    if st.button("🔄 Actualizar Datos de Pantalla"):
+    if st.button("🔄 Actualizar Datos"):
         st.rerun()
         
     sensor_data = shared_state["sensor_data"]
-    if not sensor_data:
-        st.info("Esperando datos de los sensores...")
+    # Solo tomamos los dispositivos que están enrolados AHORA MISMO
+    enrolled_devices = list(shared_state["devices"].keys())
+    
+    if not sensor_data or not enrolled_devices:
+        st.info("Esperando a que haya dispositivos enrolados y enviando datos...")
     else:
         df = pd.DataFrame(sensor_data)
-        
-        # Aseguramos que Pandas entienda la columna como fecha/hora
         df["timestamp"] = pd.to_datetime(df["timestamp"])
         
-        # 1. Tabla de datos con formato de hora legible
-        st.write("### 📋 Últimas lecturas")
-        display_df = df[["timestamp", "device_id", "temperature", "humidity"]].copy()
-        display_df["timestamp"] = display_df["timestamp"].dt.strftime('%H:%M:%S')
-        st.dataframe(display_df.tail(10), use_container_width=True)
+      
+        dispositivo_seleccionado = st.selectbox(
+            "🎛️ Selecciona un único dispositivo para visualizar:",
+            options=enrolled_devices
+        )
         
-        # 2. Gráfica de Temperatura con Eje X 
-        if "temperature" in df.columns:
-            st.write("### 🌡️ Histórico de Temperatura")
+        # Filtramos dejando SOLO los datos de ese dispositivo
+        df_filtrado = df[df["device_id"] == dispositivo_seleccionado].copy()
+        
+        if df_filtrado.empty:
+            st.warning(f"Aún no han llegado datos para {dispositivo_seleccionado}.")
+        else:
+            st.write(f"### 📋 Últimas lecturas de `{dispositivo_seleccionado}`")
+            display_df = df_filtrado[["timestamp", "temperature", "humidity"]].copy()
+            display_df["timestamp"] = display_df["timestamp"].dt.strftime('%H:%M:%S')
+            st.dataframe(display_df.tail(10))
             
-            chart_df = df.pivot(index="timestamp", columns="device_id", values="temperature")
-            
-            chart_df.index = chart_df.index.strftime('%H:%M:%S')
-            
-            st.line_chart(chart_df)
+            if "temperature" in df_filtrado.columns:
+                st.write("### 🌡️ Histórico de Temperatura")
+                
+                chart_df = df_filtrado.set_index("timestamp")[["temperature"]]
+                chart_df.index = chart_df.index.strftime('%H:%M:%S')
+                
+                st.line_chart(chart_df)

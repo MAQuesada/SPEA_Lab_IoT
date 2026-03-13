@@ -1,6 +1,7 @@
 """
-Enrollable device: pairing (keypad or screen mode) then publish sensor data.
-Resilience added: handles revocation from the platform gracefully and auto-regenerates PINs.
+Motor principal del dispositivo IoT.
+(UI separada en device_keypad.py y device_screen.py).
+Gestiona la conexión MQTT, la criptografía (R4, R5) y la resiliencia (R2, R3).
 """
 
 import base64
@@ -97,24 +98,16 @@ def run_device(
         current_alg = alg
         current_ka = ka_algorithm
 
-        # ==========================================
-        # 1. INTERFAZ DE USUARIO (KEYPAD vs SCREEN)
-        # ==========================================
+        # 1. GESTIÓN DE CREDENCIALES
         if ui_mode == "keypad":
-            if current_pin is None:
-                print(f"\n[{sensor_id}] Esperando credenciales...")
-                current_pin = input("Enter platform code: ").strip()
-            if current_alg is None:
-                current_alg = input("Enter encrypted algorithm (AES-CBC or AES-GCM): ").strip()
-            if current_ka is None:
-                current_ka = input("Enter key exchange algorithm (ecdh_ephemeral or auth_dh): ").strip()
-
+            # El lanzador ya nos pasa los datos. Si faltan, es que nos han revocado.
             if not current_pin or not current_alg or not current_ka:
-                print("❌ Faltan datos. Reiniciando...", file=sys.stderr)
-                pin, alg, ka_algorithm = None, None, None
-                continue
+                print(f"\n🔌 [{sensor_id}] Conexión finalizada permanentemente.")
+                print("👉 Vuelve a ejecutar la terminal del Keypad para iniciar otra sesión.")
+                break
                 
         elif ui_mode == "screen":
+            # Si no hay credenciales (inicio o revocación), el motor auto-genera el PIN
             if not current_pin or not current_alg or not current_ka:
                 print("\n🔄 Generando nuevo PIN de conexión seguro...")
                 current_pin = str(random.randint(100000, 999999))
@@ -129,9 +122,7 @@ def run_device(
             print("⏳ Intentando conectar con la Plataforma ...")
 
         key_mgr = KeyManager(sensor_id)
-       
         key_mgr.load_keys() 
-        
         key_mgr.derive_master_key(current_pin)
 
         enrolled_event = threading.Event()
@@ -197,13 +188,11 @@ def run_device(
             payload = json.dumps({"action": "pairing", "device_id": sensor_id, "pin": current_pin, "alg": current_alg})
             client.publish(TOPIC_ENROLL, payload, qos=1)
 
-        # ==========================================
         # 2. PROCESO DE ENROLAMIENTO
-        # ==========================================
         if ui_mode == "keypad":
             send_pairing()
             if not enrolled_event.wait(timeout=5):
-                print("\n❌ ERROR: Acceso denegado o PIN incorrecto.")
+                print("\n❌ ERROR: Acceso denegado o credenciales inválidas.")
                 print("👉 Verifica los datos en el Dashboard Web e inténtalo de nuevo.\n")
                 client.loop_stop()
                 client.disconnect()
@@ -220,9 +209,8 @@ def run_device(
             pin, alg, ka_algorithm = None, None, None
             continue
 
-        # ==========================================
+       
         # 3. INTERCAMBIO DE CLAVES Y ENVÍO DE DATOS
-        # ==========================================
         print(f"Enrolled. Starting DH key agreement (algorithm={current_ka})...")
         try:
             session_key, auth_key = run_dh_handshake(
@@ -313,13 +301,11 @@ def run_device(
         client.loop_stop()
         client.disconnect()
 
-        # SI FUE ELIMINADO POR LA WEB O POR TIMEOUT, LIMPIAMOS Y REINICIAMOS
+       # SI FUE ELIMINADO POR LA WEB O POR TIMEOUT
         if revoked_event.is_set():
             print("\n===========================================")
-            print("🔌 CONEXIÓN CERRADA.")
-            print("Preparando dispositivo para una nueva conexión...")
+            print("🔌 CONEXIÓN CERRADA POR LA PLATAFORMA.")
             print("===========================================\n")
-            pin, alg, ka_algorithm = None, None, None
-            time.sleep(2)
+            break # <--- Salimos del motor y le devolvemos el control al lanzador
 
     print("Device stopped.")

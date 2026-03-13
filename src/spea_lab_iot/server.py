@@ -406,18 +406,12 @@ def run_platform(log_enabled: bool = False, interactive: bool = True) -> None:
                 did = input("Device ID: ").strip()
                 pin = input("PIN: ").strip()
                 alg = input("Algorithm ('AES-CBC' or 'AES-GCM'): ").strip()
-                dh = input(
-                    "Key exchange algorithm ('ecdh_ephemeral' or 'auth_dh'): "
-                ).strip()
-                if did and pin and alg and dh:
+                if did and pin and alg:
                     if did == ALLOWED_DEVICES_KEY_DEFAULT:
                         print("Cannot add key 'default'; it is reserved.")
                     elif alg not in POS_ALG:
                         print("Algorithm must be one of: " + str(POS_ALG))
-                    elif dh not in POS_DH:
-                        print("Key exchange algorithm must be one of: " + str(POS_DH))
                     else:
-                        # It is not necessary to save DH algorithm. We ask for them to verify all is correct only.
                         allowed_devices[did] = {"pin": pin, "alg": alg}
                         print(
                             f"Added device_id={did!r} with PIN and algorithm={alg!r}."
