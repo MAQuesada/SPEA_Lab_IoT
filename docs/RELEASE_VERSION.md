@@ -10,8 +10,9 @@ The ecosystem consists of four main orchestrated modules running concurrently:
 
 - `server.py` — Acts as the security Gateway and central authority. Manages the allowed devices whitelist, negotiates cryptographic keys, and decrypts valid telemetry to relay it to secure channels.
 - `dashboard.py` — A command center built with Streamlit. Allows visual administration of the device lifecycle (adding/removing sensors) and monitors decrypted telemetry in real-time time-series charts.
-- `device.py` — Simulated sensor nodes supporting two interface modes (Keypad and Screen). They feature active resilience (self-healing) against access revocations and network drops.
-- `feed_subscriber.py` — A demonstration client that consumes the final plaintext data from the `iot/feed` topic.
+- `device.py` — The core, headless IoT engine. Manages MQTT connections, cryptography (R4, R5), and self-healing resilience independently from the UI.
+- `device_keypad.py` & `device_screen.py` — "Immortal" UI terminals. They handle user inputs, auto-discover IDs from PINs, and stay alive even if the platform revokes their access, acting as the "steering wheel" for the engine.
+- `device_menu.py` — A unified interactive launcher to easily spawn additional Keypad or Screen devices on demand.
 
 ---
 

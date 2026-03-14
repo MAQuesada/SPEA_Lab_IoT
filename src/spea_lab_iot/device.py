@@ -1,7 +1,7 @@
 """
-Motor principal del dispositivo IoT.
-(UI separada en device_keypad.py y device_screen.py).
-Gestiona la conexión MQTT, la criptografía (R4, R5) y la resiliencia (R2, R3).
+Main engine of the IoT device.
+(UI is separated in device_keypad.py and device_screen.py).
+Manages the MQTT connection, cryptography (R4, R5), and resilience (R2, R3).
 """
 
 import base64
@@ -28,12 +28,10 @@ from spea_lab_iot.config import (
 )
 from spea_lab_iot.key_manager import KeyManager
 from spea_lab_iot.dh_device import run_dh_handshake
-from spea_lab_iot.dh_device import run_dh_handshake
 
 from Crypto.Random import get_random_bytes
 from Crypto.Cipher import AES
 from Crypto.Hash import HMAC, SHA256
-from Crypto.Util.Padding import pad
 from Crypto.Util.Padding import pad
 
 # Sensor simulation (baseline + deviation)
@@ -79,9 +77,7 @@ def run_device(
     sensor_id: str,
     ui_mode: str,
     pin: str | None = None,
-    pin: str | None = None,
     alg: str | None = None,
-    ka_algorithm: str | None = None,
     ka_algorithm: str | None = None,
 ) -> None:
     
@@ -98,16 +94,16 @@ def run_device(
         current_alg = alg
         current_ka = ka_algorithm
 
-        # 1. GESTIÓN DE CREDENCIALES
+        # 1. CREDENTIALS MANAGEMENT
         if ui_mode == "keypad":
-            # El lanzador ya nos pasa los datos. Si faltan, es que nos han revocado.
+            # The launcher already provides the data. If missing, it means we have been revoked.
             if not current_pin or not current_alg or not current_ka:
                 print(f"\n🔌 [{sensor_id}] Conexión finalizada permanentemente.")
                 print("👉 Vuelve a ejecutar la terminal del Keypad para iniciar otra sesión.")
                 break
                 
         elif ui_mode == "screen":
-            # Si no hay credenciales (inicio o revocación), el motor auto-genera el PIN
+            # If there are no credentials (startup or revocation), the engine auto-generates the PIN
             if not current_pin or not current_alg or not current_ka:
                 print("\n🔄 Generando nuevo PIN de conexión seguro...")
                 current_pin = str(random.randint(100000, 999999))
@@ -188,7 +184,7 @@ def run_device(
             payload = json.dumps({"action": "pairing", "device_id": sensor_id, "pin": current_pin, "alg": current_alg})
             client.publish(TOPIC_ENROLL, payload, qos=1)
 
-        # 2. PROCESO DE ENROLAMIENTO
+        # 2. ENROLLMENT PROCESS
         if ui_mode == "keypad":
             send_pairing()
             if not enrolled_event.wait(timeout=5):
@@ -209,8 +205,7 @@ def run_device(
             pin, alg, ka_algorithm = None, None, None
             continue
 
-       
-        # 3. INTERCAMBIO DE CLAVES Y ENVÍO DE DATOS
+        # 3. KEY EXCHANGE AND DATA TRANSMISSION
         print(f"Enrolled. Starting DH key agreement (algorithm={current_ka})...")
         try:
             session_key, auth_key = run_dh_handshake(
@@ -228,11 +223,11 @@ def run_device(
         data_topic = data_topic_ref[0] or TOPIC_DATA
         print(f"Publishing data to {data_topic} (Ctrl+C to stop)")
 
-        rekey_attempts = 0  # Contador de intentos para la resiliencia
+        rekey_attempts = 0  # Retry counter for resilience
 
         while running_global and not revoked_event.is_set():
             
-            # --- ZONA DE ROTACIÓN DE CLAVES ---
+            # --- KEY ROTATION ZONE ---
             if key_mgr.check_rotation_needed():
                 if rekey_attempts >= 3:
                     print("\n[!] ALERTA: La plataforma no responde.")
@@ -250,16 +245,16 @@ def run_device(
                 print(f"🔄 Invoked key rotation... (Intento {rekey_attempts + 1}/3)")
                 rekey_attempts += 1
                 
-                # Esperamos 5 segundos a que la plataforma responda antes de intentar de nuevo
+                # Wait 5 seconds for the platform to respond before retrying
                 for _ in range(5):
                     if revoked_event.is_set(): break
                     time.sleep(1)
                 continue
                 
-            # Si llegamos aquí, no necesitamos rotar o la rotación fue exitosa
+            # If we reach here, we don't need to rotate or the rotation was successful
             rekey_attempts = 0
 
-            # --- ZONA DE ENVÍO DE DATOS ---
+            # --- DATA TRANSMISSION ZONE ---
             temperature = _read_temperature()
             humidity = _read_humidity()
             payload = {
@@ -278,8 +273,13 @@ def run_device(
                     enc_key = session_key_bytes[:16]
                     auth_key = session_key_bytes[16:]
                     nonce, ciphertext, tag = encrypt_aes_cbc_hmac(enc_key, auth_key, plaintext)
+                    
                 elif current_alg == "AES-GCM":
                     nonce, ciphertext, tag = encrypt_aead_aes_gcm(session_key_bytes, plaintext, aad)
+
+                else:
+                    print("ERROR: unknown algorithm", file=sys.stderr)
+                    sys.exit(1)
 
                 encrypted_payload = {
                     "device_id": sensor_id, "key_id": key_id, "nonce": base64.b64encode(nonce).decode(),
@@ -293,7 +293,7 @@ def run_device(
             except ValueError as e:
                 print(f"Waiting for key... ({e})")
 
-            # Pausa entre envíos de datos
+            # Pause between data transmissions
             for _ in range(DATA_INTERVAL_SEC):
                 if revoked_event.is_set() or not running_global: break
                 time.sleep(1)
@@ -301,11 +301,11 @@ def run_device(
         client.loop_stop()
         client.disconnect()
 
-       # SI FUE ELIMINADO POR LA WEB O POR TIMEOUT
+        # IF DELETED OR BY TIMEOUT
         if revoked_event.is_set():
             print("\n===========================================")
             print("🔌 CONEXIÓN CERRADA POR LA PLATAFORMA.")
             print("===========================================\n")
-            break # <--- Salimos del motor y le devolvemos el control al lanzador
+            break # <--- Exit the engine and return control to the launcher
 
     print("Device stopped.")

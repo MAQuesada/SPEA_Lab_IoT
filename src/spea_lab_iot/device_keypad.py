@@ -1,3 +1,9 @@
+"""
+Launcher for the device in Keypad mode.
+Auto-discovers its Device ID and Algorithm by searching for the PIN on the platform.
+Runs in an infinite loop so the terminal stays active upon revocation.
+"""
+
 import sys, time, json
 import paho.mqtt.client as mqtt
 from spea_lab_iot.device import run_device
@@ -51,7 +57,7 @@ def main() -> None:
         print(f"✅ ¡Éxito! Eres: {found_id} con {found_alg}")
         ka_alg = input("🤝 Elige DH ('ecdh_ephemeral' o 'auth_dh') [ecdh_ephemeral]: ").strip() or "ecdh_ephemeral"
 
-        # Llama al motor. Si la web lo borra, el motor hace 'break' y el bucle vuelve a empezar aquí
+        # Call the engine. If revoked by the platform, the engine breaks and the loop restarts here
         run_device(sensor_id=found_id, ui_mode="keypad", pin=target_pin, alg=found_alg, ka_algorithm=ka_alg)
         time.sleep(1)
 

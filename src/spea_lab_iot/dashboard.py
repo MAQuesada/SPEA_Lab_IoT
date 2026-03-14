@@ -1,3 +1,8 @@
+"""
+Web Dashboard for SPEA Lab IoT.
+Allows real-time device enrollment, management, and telemetry monitoring.
+"""
+
 import streamlit as st
 import paho.mqtt.client as mqtt
 import json
@@ -6,7 +11,7 @@ import pandas as pd
 from threading import Thread
 from datetime import datetime
 
-# Importar configuración centralizada
+# Centralized configuration import
 from spea_lab_iot.config import (
     MQTT_BROKER_HOST, MQTT_BROKER_PORT, MQTT_USER, MQTT_PASSWORD,
     TOPIC_ADMIN_REQ_DEVICES, TOPIC_ADMIN_RES_DEVICES,
@@ -15,20 +20,20 @@ from spea_lab_iot.config import (
 
 st.set_page_config(page_title="SPEA Lab IoT", page_icon="🛡️", layout="wide")
 
-# ==================== ESTADO COMPARTIDO ====================
-# Esto permite que el hilo MQTT en segundo plano guarde datos sin que Streamlit lo bloquee
+# ==================== SHARED STATE ====================
+# This prevents Streamlit from blocking the background MQTT thread when saving data
 @st.cache_resource
 def get_shared_state():
     return {"devices": {}, "sensor_data": []}
 
 shared_state = get_shared_state()
 
-# ==================== CLIENTE MQTT ====================
+# ==================== MQTT CLIENT ====================
 def on_connect(client, userdata, flags, rc, properties=None):
     if rc == 0:
         client.subscribe(TOPIC_ADMIN_RES_DEVICES)
         client.subscribe(TOPIC_FEED)
-        # Pedimos los dispositivos nada más conectar
+        # Request enrolled devices immediately upon connection
         client.publish(TOPIC_ADMIN_REQ_DEVICES, "get")
 
 
@@ -43,14 +48,14 @@ def on_message(client, userdata, msg):
             data = json.loads(msg.payload.decode())
             
             if "ts" in data:
-                # El sensor envía segundos, lo convertimos a fecha/hora local
+                # Sensor sends timestamps in seconds; convert to local datetime
                 data["timestamp"] = datetime.fromtimestamp(int(data["ts"]))
             else:
                 data["timestamp"] = datetime.now()
 
             shared_state["sensor_data"].append(data)
             
-        
+            # Keep only the last 100 data points in memory to avoid overflow
             if len(shared_state["sensor_data"]) > 100:
                 shared_state["sensor_data"].pop(0)
         except Exception as e:
@@ -63,12 +68,13 @@ def init_mqtt():
     client.on_connect = on_connect
     client.on_message = on_message
     client.connect(MQTT_BROKER_HOST, MQTT_BROKER_PORT, 60)
+    # Run the MQTT loop in a daemon thread so it doesn't block the UI
     Thread(target=client.loop_forever, daemon=True).start()
     return client
 
 mqtt_client = init_mqtt()
 
-# ==================== INTERFAZ WEB ====================
+# ==================== WEB INTERFACE ====================
 st.title("🛡️ SPEA Lab IoT Dashboard")
 
 tab1, tab2 = st.tabs(["⚙️ Gestión de Dispositivos", "📊 Monitor de Datos (Feed)"])
@@ -99,7 +105,7 @@ with tab1:
             time.sleep(0.5)
             st.rerun()
 
-        # Leemos del estado compartido
+        # Read from the shared state dictionary
         devices = shared_state["devices"]
         if not devices:
             st.info("No hay dispositivos enrolados en este momento.")
@@ -122,7 +128,7 @@ with tab2:
         st.rerun()
         
     sensor_data = shared_state["sensor_data"]
-    # Solo tomamos los dispositivos que están enrolados AHORA MISMO
+    # Only pick up devices that are CURRENTLY enrolled
     enrolled_devices = list(shared_state["devices"].keys())
     
     if not sensor_data or not enrolled_devices:
@@ -131,13 +137,12 @@ with tab2:
         df = pd.DataFrame(sensor_data)
         df["timestamp"] = pd.to_datetime(df["timestamp"])
         
-      
         dispositivo_seleccionado = st.selectbox(
             "🎛️ Selecciona un único dispositivo para visualizar:",
             options=enrolled_devices
         )
         
-        # Filtramos dejando SOLO los datos de ese dispositivo
+        # Filter the dataframe to isolate only the selected device's data
         df_filtrado = df[df["device_id"] == dispositivo_seleccionado].copy()
         
         if df_filtrado.empty:
