@@ -235,26 +235,21 @@ def run_platform(log_enabled: bool = False, interactive: bool = True) -> None:
             _log(log_mode[0], f"Invalid rekey signature from {device_id}")
             return
 
-        # Generate new session key and update KeyManager + session_keys dict
-        new_key = km.generate_random_session_key()
+        # R4: Signal device to start DH handshake for rotation
+        # The new session key will be derived via DH, not transmitted
         new_id = km.session_key_id + 1
-        km.set_session_key(new_key, new_id)
-        session_keys[device_id] = new_key  # R4: keep session_keys in sync
 
-        # Encrypt new key with master key (AES-GCM)
-        iv = get_random_bytes(16)
-        cipher = AES.new(km.master_key, AES.MODE_GCM, nonce=iv)
-        ciphertext, tag = cipher.encrypt_and_digest(new_key)
-
+        # Send trigger for DH handshake (device will initiate DH)
         response = {
             "device_id": device_id,
             "key_id": new_id,
-            "nonce": base64.b64encode(iv).decode(),
-            "ciphertext": base64.b64encode(ciphertext).decode(),
-            "tag": base64.b64encode(tag).decode(),
+            "rotation_method": "dh_handshake"  # Signal to use DH instead of key transmission
         }
         client.publish(TOPIC_REKEY_RESPONSE, json.dumps(response), qos=1)
-        _log(log_mode[0], f"Rekey successful for {device_id}. New key ID: {new_id}")
+        _log(log_mode[0], f"Rekey via DH handshake requested for {device_id}. New key ID: {new_id}")
+
+        # Note: The actual new session key will be set after DH handshake completes
+        # via the dh_handler.on_dh_finish() callback which updates session_keys dict
 
     def on_data_message(
         client: mqtt.Client, userdata: object, msg: mqtt.MQTTMessage

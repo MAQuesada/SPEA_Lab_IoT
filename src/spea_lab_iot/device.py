@@ -145,15 +145,22 @@ def run_device(
             if msg.topic == TOPIC_REKEY_RESPONSE:
                 try:
                     payload = json.loads(msg.payload.decode())
-                    if payload.get("device_id") != sensor_id: return
-                    nonce = base64.b64decode(payload["nonce"])
-                    tag = base64.b64decode(payload["tag"])
-                    ciphertext = base64.b64decode(payload["ciphertext"])
-                    key_id = payload["key_id"]
-                    cipher = AES.new(key_mgr.master_key, AES.MODE_GCM, nonce=nonce)
-                    new_session_key = cipher.decrypt_and_verify(ciphertext, tag)
-                    key_mgr.set_session_key(new_session_key, key_id)
-                    print(f"✅ Key rotation successful. New Key ID: {key_id}")
+                    if payload.get("device_id") != sensor_id: 
+                        return
+                    
+                    # R4: Instead of receiving encrypted key, perform new DH handshake
+                    print(f"🔄 Starting DH handshake for key rotation...")
+                    new_session_key, new_auth_key = run_dh_handshake(
+                        client=client,
+                        device_id=sensor_id,
+                        pin=current_pin,
+                        algorithm=current_ka
+                    )
+                    
+                    new_key_id = payload.get("key_id", key_mgr.session_key_id + 1)
+                    key_mgr.set_session_key(new_session_key, new_key_id)
+                    print(f"✅ Key rotation via DH successful. New Key ID: {new_key_id}")
+                    
                 except Exception as e:
                     print(f"Error handling rekey response: {e}")
                 return
