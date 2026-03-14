@@ -1,5 +1,6 @@
 """
 Subscriber to iot/feed: receives data relayed by the platform (includes device_id).
+Subscriber to iot/data: receives RAW encrypted data to demonstrate R5 encryption.
 """
 
 from dotenv import load_dotenv
@@ -17,6 +18,7 @@ from spea_lab_iot.config import (
     MQTT_PASSWORD,
     MQTT_USER,
     TOPIC_FEED,
+    TOPIC_DATA,  # Add RAW data channel
 )
 
 
@@ -28,25 +30,40 @@ def on_connect(
     properties: object | None = None,
 ) -> None:
     if reason_code == 0:
-        print(f"Connected to broker {MQTT_BROKER_HOST}")
+        print(f"Conectado al broker {MQTT_BROKER_HOST}")
+        # Subscribe to both channels
         client.subscribe(TOPIC_FEED, qos=1)
-        print(f"Subscribed to topic '{TOPIC_FEED}' (Ctrl+C to stop)\n")
+        client.subscribe(TOPIC_DATA, qos=1)
+        
+        print(f"🎧 Suscrito al canal público (RAW Cifrado): '{TOPIC_DATA}'")
+        print(f"✅ Suscrito al canal privado (Feed Descifrado): '{TOPIC_FEED}'")
+        print("(Ctrl+C para detener)\n")
+        print("-" * 70)
     else:
-        print(f"Connection failed: {reason_code}", file=sys.stderr)
+        print(f"Error de conexión: {reason_code}", file=sys.stderr)
 
 
 def on_message(client: mqtt.Client, userdata: object, msg: mqtt.MQTTMessage) -> None:
     try:
-        payload = json.loads(msg.payload.decode())
-        device_id = payload.get("device_id", "?")
-        temp = payload.get("temperature", "?")
-        humidity = payload.get("humidity", "?")
-        print(
-            f"Received: device_id={device_id!r}, temperature={temp}°C, humidity={humidity}%"
-        )
-        print(f"  Raw payload: {payload}")
+        payload_str = msg.payload.decode()
+        
+        if msg.topic == TOPIC_DATA:
+            # Requirement R5: Show the unintelligible payload traveling through the network
+            print(f"🔒 [iot/data RAW] -> {payload_str}")
+            
+        elif msg.topic == TOPIC_FEED:
+            # Clean and decrypted data after passing through the Platform (Gateway)
+            payload = json.loads(payload_str)
+            device_id = payload.get("device_id", "?")
+            temp = payload.get("temperature", "?")
+            humidity = payload.get("humidity", "?")
+            print(
+                f"🟢 [iot/feed DESCIFRADO] -> dispositivo={device_id!r}, temperatura={temp}°C, humedad={humidity}%"
+            )
+            print("-" * 70)
+            
     except (json.JSONDecodeError, UnicodeDecodeError) as e:
-        print(f"Received (raw): {msg.payload!r} (parse error: {e})")
+        print(f"Recibido (raw): {msg.payload!r} (error de parseo: {e})")
 
 
 def main() -> None:
@@ -58,7 +75,7 @@ def main() -> None:
     try:
         client.connect(MQTT_BROKER_HOST, MQTT_BROKER_PORT, keepalive=60)
     except Exception as e:
-        print(f"Could not connect: {e}", file=sys.stderr)
+        print(f"No se pudo conectar: {e}", file=sys.stderr)
         sys.exit(1)
 
     client.loop_forever()

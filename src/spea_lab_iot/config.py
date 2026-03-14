@@ -1,7 +1,6 @@
 """Configuration from environment variables and topic names."""
 
 import os
-
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -28,7 +27,6 @@ TOPIC_DH_INIT = "iot/dh/init"
 TOPIC_DH_RESPONSE = "iot/dh/response"
 TOPIC_DH_FINISH = "iot/dh/finish"
 
-
 # Platform: default PIN for keypad devices (cannot be deleted)
 PLATFORM_DEFAULT_PIN = os.environ.get("PLATFORM_DEFAULT_PIN", "platform-pin")
 
@@ -39,3 +37,10 @@ DEFAULT_KA_ALGORITHM = "ecdh_ephemeral"  # or "auth_dh"
 SALT_AUTH = b"spea-lab-iot-auth"
 SALT_SESS = b"spea-lab-iot-session"
 SALT_KM = b"iot-mock-salt"
+
+# --- ADMIN TOPICS PARA EL DASHBOARD WEB ---
+TOPIC_ADMIN_BASE = "iot/admin/#"
+TOPIC_ADMIN_REQ_DEVICES = "iot/admin/req_devices"
+TOPIC_ADMIN_RES_DEVICES = "iot/admin/res_devices"
+TOPIC_ADMIN_REMOVE = "iot/admin/remove"
+TOPIC_ADMIN_ADD = "iot/admin/add"

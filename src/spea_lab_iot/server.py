@@ -38,6 +38,11 @@ from spea_lab_iot.config import (
     TOPIC_REKEY_RESPONSE,
     TOPIC_DH_INIT,
     TOPIC_DH_FINISH,
+    TOPIC_ADMIN_BASE,
+    TOPIC_ADMIN_REQ_DEVICES,
+    TOPIC_ADMIN_RES_DEVICES,
+    TOPIC_ADMIN_ADD,
+    TOPIC_ADMIN_REMOVE
 )
 from spea_lab_iot.key_manager import KeyManager
 from spea_lab_iot.dh_platform import DHPlatformHandler
@@ -138,6 +143,8 @@ def run_platform(log_enabled: bool = False, interactive: bool = True) -> None:
             # R4: subscribe to DH topics
             client.subscribe(TOPIC_DH_INIT, qos=1)
             client.subscribe(TOPIC_DH_FINISH, qos=1)
+            #Dashboard Web
+            client.subscribe(TOPIC_ADMIN_BASE, qos=1)
         else:
             print(f"Connection failed: {reason_code}", file=sys.stderr)
 
@@ -314,6 +321,41 @@ def run_platform(log_enabled: bool = False, interactive: bool = True) -> None:
     def on_message(
         client: mqtt.Client, userdata: object, msg: mqtt.MQTTMessage
     ) -> None:
+        # --- Lógica del Dashboard Web ---
+        if msg.topic == TOPIC_ADMIN_REQ_DEVICES:
+            safe_devices = {k: v for k, v in allowed_devices.items() if k != ALLOWED_DEVICES_KEY_DEFAULT}
+            client.publish("iot/admin/res_devices", json.dumps(safe_devices), qos=1)
+            return
+            
+        if msg.topic == TOPIC_ADMIN_REMOVE:
+            try:
+                payload = json.loads(msg.payload.decode())
+                did = payload.get("device_id")
+                if did and did in allowed_devices and did != ALLOWED_DEVICES_KEY_DEFAULT:
+                    del allowed_devices[did]
+                    enrolled_devices.discard(did)
+                    session_keys.pop(did, None)
+                    auth_keys.pop(did, None)
+                    device_managers.pop(did, None)
+                    print("Choice [1-5]: ", end="", flush=True) 
+            except Exception as e:
+                _log(log_mode[0], f"Error processing web removal: {e}")
+            return
+        # --- Comando para AÑADIR desde la web ---
+        if msg.topic == TOPIC_ADMIN_ADD:
+            try:
+                payload = json.loads(msg.payload.decode())
+                did = payload.get("device_id")
+                pin = payload.get("pin")
+                alg = payload.get("alg")
+                if did and pin and alg and did != ALLOWED_DEVICES_KEY_DEFAULT:
+                    allowed_devices[did] = {"pin": pin, "alg": alg}
+                    print(f"\n[Web Admin] Added device_id={did!r} with algorithm={alg!r}.")
+                    print("Choice [1-5]: ", end="", flush=True) 
+            except Exception as e:
+                _log(log_mode[0], f"Error processing web add: {e}")
+            return
+        # ---------------------------------------
         if msg.topic == TOPIC_ENROLL:
             on_enroll_message(client, userdata, msg)
         elif msg.topic == TOPIC_REKEY:
@@ -364,18 +406,12 @@ def run_platform(log_enabled: bool = False, interactive: bool = True) -> None:
                 did = input("Device ID: ").strip()
                 pin = input("PIN: ").strip()
                 alg = input("Algorithm ('AES-CBC' or 'AES-GCM'): ").strip()
-                dh = input(
-                    "Key exchange algorithm ('ecdh_ephemeral' or 'auth_dh'): "
-                ).strip()
-                if did and pin and alg and dh:
+                if did and pin and alg:
                     if did == ALLOWED_DEVICES_KEY_DEFAULT:
                         print("Cannot add key 'default'; it is reserved.")
                     elif alg not in POS_ALG:
                         print("Algorithm must be one of: " + str(POS_ALG))
-                    elif dh not in POS_DH:
-                        print("Key exchange algorithm must be one of: " + str(POS_DH))
                     else:
-                        # It is not necessary to save DH algorithm. We ask for them to verify all is correct only.
                         allowed_devices[did] = {"pin": pin, "alg": alg}
                         print(
                             f"Added device_id={did!r} with PIN and algorithm={alg!r}."
