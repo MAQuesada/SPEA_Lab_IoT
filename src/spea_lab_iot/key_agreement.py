@@ -184,3 +184,187 @@ class _ECDHKeyAgreement(KeyAgreement):
         peer_pub = X25519PublicKey.from_public_bytes(peer_public_key_bytes)
         raw_shared = self._private_key.exchange(peer_pub)
         return _hkdf_session(raw_shared)
+# ---------------------------------------------------------------------------
+# Key Rotation Manager (R4) - Automatic DH-based rotation
+# ---------------------------------------------------------------------------
+
+import time
+from threading import Timer, Lock
+
+
+class KeyRotationManager:
+    
+    
+    def __init__(self, rotation_interval_seconds=300):
+        """
+        Initialize rotation manager.
+        
+        Args:
+            rotation_interval_seconds: Time between rotations (default: 300 = 5 min)
+        """
+        self.rotation_interval = rotation_interval_seconds
+        self.last_rotation_time = time.time()
+        self.rotation_timer = None
+        self.rotation_callback = None
+        self.lock = Lock()
+        self.is_running = False
+        
+        print(f"[KeyRotation] Manager created (interval: {rotation_interval_seconds}s)")
+    
+    def should_rotate(self):
+        """
+        Check if rotation is needed based on time elapsed.
+        
+        Returns:
+            bool: True if rotation interval has passed
+        """
+        with self.lock:
+            elapsed = time.time() - self.last_rotation_time
+            return elapsed >= self.rotation_interval
+    
+    def mark_rotated(self):
+        """Mark that a rotation just occurred."""
+        with self.lock:
+            self.last_rotation_time = time.time()
+            print(f"[KeyRotation] Rotation completed at {time.strftime('%H:%M:%S')}")
+    
+    def start_automatic_rotation(self, on_rotate_callback):
+        """
+        Start automatic rotation timer.
+        
+        Args:
+            on_rotate_callback: Function to call when rotation is needed.
+                               This should perform a new DH handshake.
+                               Signature: callback() -> None
+        """
+        if self.is_running:
+            print("[KeyRotation] ⚠️  Rotation already running")
+            return
+        
+        self.rotation_callback = on_rotate_callback
+        self.is_running = True
+        self._schedule_next_rotation()
+        print(f"[KeyRotation] ✅ Automatic rotation started (every {self.rotation_interval}s)")
+    
+    def stop_automatic_rotation(self):
+        """Stop automatic rotation."""
+        with self.lock:
+            if self.rotation_timer:
+                self.rotation_timer.cancel()
+                self.rotation_timer = None
+            self.is_running = False
+        print("[KeyRotation] ⏸️  Automatic rotation stopped")
+    
+    def _schedule_next_rotation(self):
+        """Schedule the next rotation using a timer."""
+        def rotate():
+            if not self.is_running:
+                return
+            
+            print(f"\n🔄 [KeyRotation] Triggering rotation after {self.rotation_interval}s")
+            
+            if self.rotation_callback:
+                try:
+                    # Call the callback to perform DH handshake
+                    self.rotation_callback()
+                    self.mark_rotated()
+                except Exception as e:
+                    print(f"❌ [KeyRotation] Error during rotation: {e}")
+            
+            # Schedule next rotation
+            if self.is_running:
+                self._schedule_next_rotation()
+        
+        with self.lock:
+            self.rotation_timer = Timer(self.rotation_interval, rotate)
+            self.rotation_timer.daemon = True  # Won't block program exit
+            self.rotation_timer.start()
+    
+    def get_time_until_rotation(self):
+        """
+        Get remaining time until next rotation.
+        
+        Returns:
+            float: Seconds remaining
+        """
+        with self.lock:
+            elapsed = time.time() - self.last_rotation_time
+            return max(0, self.rotation_interval - elapsed)
+    
+    def get_rotation_stats(self):
+        """
+        Get rotation statistics.
+        
+        Returns:
+            dict: Statistics including interval, last rotation time, etc.
+        """
+        with self.lock:
+            elapsed = time.time() - self.last_rotation_time
+            return {
+                'interval_seconds': self.rotation_interval,
+                'last_rotation': time.strftime('%Y-%m-%d %H:%M:%S', 
+                                              time.localtime(self.last_rotation_time)),
+                'elapsed_seconds': round(elapsed, 2),
+                'remaining_seconds': round(max(0, self.rotation_interval - elapsed), 2),
+                'is_running': self.is_running
+            }
+
+
+# ---------------------------------------------------------------------------
+# Test
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    print("Testing KeyRotation with DH handshake...\n")
+    
+    pin = "1234"
+    rotation_count = [0]
+    
+    def perform_dh_rotation():
+        """
+        This callback performs a complete DH handshake for rotation.
+        In real usage, this would exchange keys via MQTT.
+        """
+        rotation_count[0] += 1
+        print(f"🔄 ROTATION #{rotation_count[0]}")
+        
+        # Perform new DH handshake (both sides)
+        sensor_ka = KeyAgreement.create("ecdh_ephemeral", pin)
+        platform_ka = KeyAgreement.create("ecdh_ephemeral", pin)
+        
+        sensor_pub = sensor_ka.public_key_bytes()
+        platform_pub = platform_ka.public_key_bytes()
+        
+        # Both derive new session key
+        sensor_session = sensor_ka.derive_session_key(platform_pub)
+        platform_session = platform_ka.derive_session_key(sensor_pub)
+        
+        assert sensor_session == platform_session
+        print(f"   ✅ New session key: {sensor_session.hex()[:32]}...")
+    
+    # Create rotation manager (rotate every 5 seconds for testing)
+    rotation_mgr = KeyRotationManager(rotation_interval_seconds=5)
+    
+    # Start automatic rotation
+    rotation_mgr.start_automatic_rotation(perform_dh_rotation)
+    
+    print("⏱️  Rotation configured: every 5 seconds")
+    print("⏱️  Test will run for 20 seconds (4 rotations expected)")
+    print("⏱️  Press Ctrl+C to stop\n")
+    
+    try:
+        time.sleep(20)
+        
+        print(f"\n{'='*60}")
+        print(f"TEST COMPLETE")
+        print(f"{'='*60}")
+        print(f"✅ Rotations performed: {rotation_count[0]}")
+        print(f"✅ Expected: 4")
+        
+        if rotation_count[0] == 4:
+            print("\n🎉 TEST PASSED! Rotation with DH works!")
+        
+    except KeyboardInterrupt:
+        print("\n\n⚠️  Test interrupted")
+    finally:
+        rotation_mgr.stop_automatic_rotation()
