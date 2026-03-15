@@ -235,26 +235,16 @@ def run_platform(log_enabled: bool = False, interactive: bool = True) -> None:
             _log(log_mode[0], f"Invalid rekey signature from {device_id}")
             return
 
-        # Generate new session key and update KeyManager + session_keys dict
-        new_key = km.generate_random_session_key()
+        # The new session key will be set when dh_handler.on_dh_finish() is called
         new_id = km.session_key_id + 1
-        km.set_session_key(new_key, new_id)
-        session_keys[device_id] = new_key  # R4: keep session_keys in sync
 
-        # Encrypt new key with master key (AES-GCM)
-        iv = get_random_bytes(16)
-        cipher = AES.new(km.master_key, AES.MODE_GCM, nonce=iv)
-        ciphertext, tag = cipher.encrypt_and_digest(new_key)
-
+        # Send acknowledgment - device will initiate DH handshake via iot/dh/init
         response = {
             "device_id": device_id,
             "key_id": new_id,
-            "nonce": base64.b64encode(iv).decode(),
-            "ciphertext": base64.b64encode(ciphertext).decode(),
-            "tag": base64.b64encode(tag).decode(),
         }
         client.publish(TOPIC_REKEY_RESPONSE, json.dumps(response), qos=1)
-        _log(log_mode[0], f"Rekey successful for {device_id}. New key ID: {new_id}")
+        _log(log_mode[0], f"Necesidad de rotacion conocida por {device_id}. Esperando a DH handshake...")
 
     def on_data_message(
         client: mqtt.Client, userdata: object, msg: mqtt.MQTTMessage
@@ -314,6 +304,7 @@ def run_platform(log_enabled: bool = False, interactive: bool = True) -> None:
                 return
         except Exception as e:
             _log(log_mode[0], f"Decryption failed for {device_id}: {e}")
+            return
 
         client.publish(TOPIC_FEED, plaintext, qos=1)
         _log(log_mode[0], f"Relayed data from device_id={device_id!r} to {TOPIC_FEED}")
@@ -370,11 +361,14 @@ def run_platform(log_enabled: bool = False, interactive: bool = True) -> None:
             dh_handler.on_dh_finish(client, msg)
             # Sync session key into KeyManager for R2-R3 rotation
             for did, sk in session_keys.items():
-                if did in device_managers and not device_managers[did].session_key:
-                    device_managers[did].set_session_key(sk, key_id=0)
+                if did in device_managers:
+                    # Update KeyManager with new session key from DH handshake
+                    km = device_managers[did]
+                    new_key_id = km.session_key_id + 1 if km.session_key else 0
+                    km.set_session_key(sk, key_id=new_key_id)
                     _log(
                         log_mode[0],
-                        f"KeyManager initialized with DH session key for {did!r}",
+                        f"KeyManager actualizado con la clave DH para {did!r}, key_id={new_key_id}",
                     )
 
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
