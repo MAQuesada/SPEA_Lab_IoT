@@ -85,13 +85,13 @@ uv run ruff check .
 ### Run the application
 
 ```bash
-uv run python -m spea_lab_iot.main
+uv run python -m start_lab.py
 ```
 
 Or:
 
 ```bash
-uv run python src/spea_lab_iot/main.py
+uv run python ./start_lab.py
 ```
 
 ### Lint and format
@@ -124,5 +124,7 @@ The project uses Python 3.11+ (see `.python-version`). UV will use this version 
 
 - **MQTT demo** (sensor + subscriber, no enrollment): [docs/MQTT_DEMO.md](docs/MQTT_DEMO.md)
 - **R1: Enrollable devices + platform** (pairing, keypad/screen, iot/feed): [docs/R1_DEVICE_PLATFORM.md](docs/R1_DEVICE_PLATFORM.md)
-- **R2: Key Management** (Master Key, Session Key, rotation): [docs/R2_KEY_MANAGEMENT.md](docs/R2_KEY_MANAGEMENT.md)
+- **R2-R3: Key Management** (Master Key, Session Key, rotation): [docs/R2_KEY_MANAGEMENT.md](docs/R2_KEY_MANAGEMENT.md)
+- **R4: Key Agreement** (Authenticated DH, ECDH ephemeral): [docs/R4_KEY_AGREEMENT.md](docs/R4_KEY_AGREEMENT.md)
 - **R5: Data Encryption** (AES-GCM, AES-CBC+HMAC): [docs/R5_DATA_ENCRYPTION.md](docs/R5_DATA_ENCRYPTION.md)
+- **RELEASE VERSION** (Final UI, Collect everything): [docs/RELEASE_VERSION.md](docs/RELEASE_VERSION.md)

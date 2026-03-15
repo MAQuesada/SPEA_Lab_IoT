@@ -42,7 +42,8 @@ from spea_lab_iot.config import (
     TOPIC_ADMIN_REQ_DEVICES,
     TOPIC_ADMIN_RES_DEVICES,
     TOPIC_ADMIN_ADD,
-    TOPIC_ADMIN_REMOVE
+    TOPIC_ADMIN_REMOVE,
+    PLATFORM_LOG
 )
 from spea_lab_iot.key_manager import KeyManager
 from spea_lab_iot.dh_platform import DHPlatformHandler
@@ -481,7 +482,7 @@ def run_platform(log_enabled: bool = False, interactive: bool = True) -> None:
 
 
 def main() -> None:
-    log_env = os.environ.get("PLATFORM_LOG", "").lower() in ("1", "true", "yes")
+    log_env = PLATFORM_LOG.lower() in ("1", "true", "yes")
     run_platform(log_enabled=log_env)
 
 

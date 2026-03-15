@@ -6,7 +6,11 @@ from Crypto.Hash import SHA256
 from Crypto.Protocol.KDF import PBKDF2
 from Crypto.Random import get_random_bytes
 
-from spea_lab_iot.config import SALT_KM
+from spea_lab_iot.config import (
+    SALT_KM,
+    KEY_ROTATION_INTERVAL_SEC,
+    KEY_ROTATION_MSG_LIMIT,
+)
 
 
 class KeyManager:
@@ -30,10 +34,8 @@ class KeyManager:
         self.msg_count = 0
 
         # Configuration
-        self.rotation_interval_sec = int(
-            os.environ.get("KEY_ROTATION_INTERVAL_SEC", "60")
-        )
-        self.rotation_msg_limit = int(os.environ.get("KEY_ROTATION_MSG_LIMIT", "100"))
+        self.rotation_interval_sec = int(KEY_ROTATION_INTERVAL_SEC)
+        self.rotation_msg_limit = int(KEY_ROTATION_MSG_LIMIT)
 
         self.storage_dir.mkdir(parents=True, exist_ok=True)
 
