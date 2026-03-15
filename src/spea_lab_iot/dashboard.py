@@ -77,30 +77,30 @@ mqtt_client = init_mqtt()
 # ==================== WEB INTERFACE ====================
 st.title("🛡️ SPEA Lab IoT Dashboard")
 
-tab1, tab2 = st.tabs(["⚙️ Gestión de Dispositivos", "📊 Monitor de Datos (Feed)"])
+tab1, tab2 = st.tabs(["⚙️ Device Management", "📊 Data Monitor (Feed)"])
 
 with tab1:
     col_izq, col_der = st.columns([1, 1])
     
     with col_izq:
-        st.subheader("➕ Añadir Nuevo Dispositivo")
+        st.subheader("➕ Add New Device")
         with st.form("add_device_form", clear_on_submit=True):
             new_id = st.text_input("Device ID (ej. sensor-01)")
-            new_pin = st.text_input("PIN de enrolamiento", type="password")
-            new_alg = st.selectbox("Algoritmo de Cifrado", ["AES-GCM", "AES-CBC"])
-            submit_btn = st.form_submit_button("Registrar Dispositivo")
+            new_pin = st.text_input("Enrollment PIN", type="password")
+            new_alg = st.selectbox("Encryption Algorithm", ["AES-GCM", "AES-CBC"])
+            submit_btn = st.form_submit_button("Register Device")
             
             if submit_btn and new_id and new_pin:
                 payload = json.dumps({"device_id": new_id, "pin": new_pin, "alg": new_alg})
                 mqtt_client.publish(TOPIC_ADMIN_ADD, payload)
-                st.success(f"Enviando solicitud para {new_id}...")
+                st.success(f"Sending request for {new_id}...")
                 time.sleep(0.5)
                 mqtt_client.publish(TOPIC_ADMIN_REQ_DEVICES, "get")
                 st.rerun()
 
     with col_der:
-        st.subheader("📡 Dispositivos Activos")
-        if st.button("🔄 Refrescar Lista"):
+        st.subheader("📡 Active Devices")
+        if st.button("🔄 Refresh List"):
             mqtt_client.publish(TOPIC_ADMIN_REQ_DEVICES, "get")
             time.sleep(0.5)
             st.rerun()
@@ -108,7 +108,7 @@ with tab1:
         # Read from the shared state dictionary
         devices = shared_state["devices"]
         if not devices:
-            st.info("No hay dispositivos enrolados en este momento.")
+            st.info("There are no devices enrolled at this time.")
         else:
             for device_id, info in devices.items():
                 c1, c2, c3 = st.columns([2, 2, 1])
@@ -122,9 +122,9 @@ with tab1:
                     st.rerun()
 
 with tab2:
-    st.subheader("📊 Monitor de Telemetría en Tiempo Real")
+    st.subheader("📊 Real-Time Telemetry Monitor")
     
-    if st.button("🔄 Actualizar Datos"):
+    if st.button("🔄 Update Data"):
         st.rerun()
         
     sensor_data = shared_state["sensor_data"]
@@ -132,13 +132,13 @@ with tab2:
     enrolled_devices = list(shared_state["devices"].keys())
     
     if not sensor_data or not enrolled_devices:
-        st.info("Esperando a que haya dispositivos enrolados y enviando datos...")
+        st.info("Waiting for devices to enroll and send data...")
     else:
         df = pd.DataFrame(sensor_data)
         df["timestamp"] = pd.to_datetime(df["timestamp"])
         
         dispositivo_seleccionado = st.selectbox(
-            "🎛️ Selecciona un único dispositivo para visualizar:",
+            "🎛️ Select a single device to view:",
             options=enrolled_devices
         )
         
@@ -146,15 +146,15 @@ with tab2:
         df_filtrado = df[df["device_id"] == dispositivo_seleccionado].copy()
         
         if df_filtrado.empty:
-            st.warning(f"Aún no han llegado datos para {dispositivo_seleccionado}.")
+            st.warning(f"No data has been received yet for {dispositivo_seleccionado}.")
         else:
-            st.write(f"### 📋 Últimas lecturas de `{dispositivo_seleccionado}`")
+            st.write(f"### 📋 Latest readings from `{dispositivo_seleccionado}`")
             display_df = df_filtrado[["timestamp", "temperature", "humidity"]].copy()
             display_df["timestamp"] = display_df["timestamp"].dt.strftime('%H:%M:%S')
             st.dataframe(display_df.tail(10))
             
             if "temperature" in df_filtrado.columns:
-                st.write("### 🌡️ Histórico de Temperatura")
+                st.write("### 🌡️ Temperature History")
                 
                 chart_df = df_filtrado.set_index("timestamp")[["temperature"]]
                 chart_df.index = chart_df.index.strftime('%H:%M:%S')

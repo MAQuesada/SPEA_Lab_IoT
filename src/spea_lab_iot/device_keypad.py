@@ -12,14 +12,14 @@ from spea_lab_iot.config import (MQTT_BROKER_HOST, MQTT_BROKER_PORT, MQTT_USER, 
 def main() -> None:
     while True:
         print("\n" + "=" * 55)
-        print("🎛️  MODO KEYPAD (Auto-Descubrimiento por PIN)")
+        print("🎛️  KEYPAD MODE (Auto-Discovery by PIN)")
         print("=" * 55)
         
-        target_pin = input("🔑 Ingresa el PIN que registraste (o presiona Enter para salir): ").strip()
+        target_pin = input("🔑 Enter the PIN you registered (or press Enter to exit): ").strip()
         if not target_pin:
             sys.exit(0)
 
-        print("🔍 Consultando a la plataforma...")
+        print("🔍 Consulting the platform...")
         found_id, found_alg = None, None
 
         def on_connect(client, userdata, flags, rc, properties=None):
@@ -50,12 +50,12 @@ def main() -> None:
         while found_id is None and time.time() - start_time < 5: client.loop(0.1)
             
         if not found_id:
-            print(f"❌ La plataforma no conoce el PIN '{target_pin}'. Inténtalo de nuevo.")
+            print(f"❌ The platform does not recognize the PIN '{target_pin}'. Try again.")
             time.sleep(1)
             continue
             
-        print(f"✅ ¡Éxito! Eres: {found_id} con {found_alg}")
-        ka_alg = input("🤝 Elige DH ('ecdh_ephemeral' o 'auth_dh') [ecdh_ephemeral]: ").strip() or "ecdh_ephemeral"
+        print(f"✅ Success! You are: {found_id} with {found_alg}")
+        ka_alg = input("🤝 Choose DH ('ecdh_ephemeral' or 'auth_dh') [ecdh_ephemeral]: ").strip() or "ecdh_ephemeral"
 
         # Call the engine. If revoked by the platform, the engine breaks and the loop restarts here
         run_device(sensor_id=found_id, ui_mode="keypad", pin=target_pin, alg=found_alg, ka_algorithm=ka_alg)

@@ -40,6 +40,6 @@ print("   ✅ Rotation 2 OK\n")
 
 # Verify the keys are differents
 assert key1_device != key2_device
-print("✅ Las claves de rotación son diferentes (prueba de que DH funciona).\n")
+print("✅ The rotation keys are different (proof that DH works).\n")
 
-print("🎉 ¡Prueba de rotación con DH superada!")
+print("🎉 DH rotation test successful !")

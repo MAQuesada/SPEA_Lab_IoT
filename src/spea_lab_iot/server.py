@@ -62,8 +62,6 @@ POS_DH = ["ecdh_ephemeral", "auth_dh"]
 
 
 # ==================================================================================================
-# ==================================================================================================
-
 
 def _log(enable: bool, msg: str) -> None:
     if enable:
@@ -71,8 +69,6 @@ def _log(enable: bool, msg: str) -> None:
 
 
 # ------------------- FUNCTIONS RELATED TO CRYPTOGRAPHIC----------------------
-
-
 def decrypt_aead_aes_gcm(key, nonce, ciphertext, tag, aad):
     cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
     cipher.update(aad)
@@ -85,8 +81,6 @@ def decrypt_aes_cbc(enc_key, mac_key, iv, ciphertext, tag):
     h.verify(tag)
     cipher = AES.new(enc_key, AES.MODE_CBC, iv)
     return unpad(cipher.decrypt(ciphertext), AES.block_size)
-
-
 # ----------------------------------------------------------------------------
 
 
@@ -100,11 +94,11 @@ def run_platform(log_enabled: bool = False, interactive: bool = True) -> None:
     device_managers: dict[str, KeyManager] = {}
     log_mode = [log_enabled]
 
-    # R4: dicts for session and auth keys (populated by DHPlatformHandler after handshake)
+    # Dicts for session and auth keys (populated by DHPlatformHandler after handshake)
     session_keys: dict[str, bytes] = {}
     auth_keys: dict[str, bytes] = {}
 
-    # R4: build a pin-only view for DHPlatformHandler
+    # Build a pin-only view for DHPlatformHandler
     # We use a wrapper that extracts the pin from allowed_devices
     class _PinView(dict):
         """Read-only view: device_id -> pin, compatible with DHPlatformHandler."""
@@ -140,10 +134,10 @@ def run_platform(log_enabled: bool = False, interactive: bool = True) -> None:
             client.subscribe(TOPIC_ENROLL, qos=1)
             client.subscribe(TOPIC_REKEY, qos=1)
             client.subscribe(TOPIC_DATA, qos=1)
-            # R4: subscribe to DH topics
+            # Subscribe to DH topics
             client.subscribe(TOPIC_DH_INIT, qos=1)
             client.subscribe(TOPIC_DH_FINISH, qos=1)
-            #Dashboard Web
+            # Dashboard Web
             client.subscribe(TOPIC_ADMIN_BASE, qos=1)
         else:
             print(f"Connection failed: {reason_code}", file=sys.stderr)
@@ -179,12 +173,15 @@ def run_platform(log_enabled: bool = False, interactive: bool = True) -> None:
             allowed_devices[device_id] = {"pin": pin, "alg": alg}
 
         allowed_dict = allowed_devices.get(device_id)
+
+        # If it isnt in the list of allowed_device, their pin must be the platform one
         if allowed_dict is None and pin != platform_pin:
             _log(
                 log_mode[0], f"Pairing rejected for device_id={device_id!r} (wrong PIN)"
             )
             return
         else:
+            # The pin must be the platform one or the allowed pin
             allowed_pin = allowed_dict.get("pin")
             if pin != platform_pin and pin != allowed_pin:
                 _log(
@@ -192,10 +189,20 @@ def run_platform(log_enabled: bool = False, interactive: bool = True) -> None:
                     f"Pairing rejected for device_id={device_id!r} (wrong PIN)",
                 )
                 return
+            
+            # The encrypted algorithm must be the same
+            allowed_alg = allowed_dict.get("alg")
+            if allowed_alg != alg:
+                _log(
+                    log_mode[0],
+                    f"Pairing rejected for device_id={device_id!r} (wrong encryption algorithm)",
+                )
+                return
+
 
         enrolled_devices.add(device_id)
 
-        # R2-R3: initialize KeyManager for this device
+        # Initialize KeyManager for this device
         km = KeyManager(device_id)
         km.derive_master_key(pin)
         device_managers[device_id] = km
@@ -244,7 +251,7 @@ def run_platform(log_enabled: bool = False, interactive: bool = True) -> None:
             "key_id": new_id,
         }
         client.publish(TOPIC_REKEY_RESPONSE, json.dumps(response), qos=1)
-        _log(log_mode[0], f"Necesidad de rotacion conocida por {device_id}. Esperando a DH handshake...")
+        _log(log_mode[0], f"Rotation acknowledged for {device_id}. Waiting for DH handshake...")
 
     def on_data_message(
         client: mqtt.Client, userdata: object, msg: mqtt.MQTTMessage
@@ -267,14 +274,25 @@ def run_platform(log_enabled: bool = False, interactive: bool = True) -> None:
         if not algorithm or algorithm not in POS_ALG:
             _log(log_mode[0], "Data message without valid alg, ignored")
             return
+        
+        device = allowed_devices.get(device_id)
+        real_alg = device.get("alg")
+        if real_alg != algorithm:
+            _log(log_mode[0], "Data message with different alg, ignored")
+            return
+        
+        key_id = payload.get("key_id","")
+        if not key_id and key_id != 0:
+            _log(log_mode[0], "Data message without key id, ignored")
+            return
 
         nonce = base64.b64decode(payload.get("nonce", ""))
         ciphertext = base64.b64decode(payload.get("ciphertext", ""))
         tag = base64.b64decode(payload.get("tag", ""))
-        timestamp = payload.get("ts")
+        timestamp = payload.get("ts","")
 
         if not nonce or not ciphertext or not tag or not timestamp:
-            _log(log_mode[0], "Incomplete data message, ignored")
+            _log(log_mode[0], f"Incomplete data message, ignored")
             return
 
         # Get KeyManager
@@ -294,7 +312,7 @@ def run_platform(log_enabled: bool = False, interactive: bool = True) -> None:
                 plaintext = decrypt_aes_cbc(enc_key, auth_key, nonce, ciphertext, tag)
             elif algorithm == "AES-GCM":
                 # AEAD
-                aad = (device_id + "|" + timestamp).encode()
+                aad = (device_id + "|" + timestamp + "|" + str(key_id)).encode()
                 # Use full 32 bytes for GCM (matching device.py)
                 plaintext = decrypt_aead_aes_gcm(
                     session_key_bytes, nonce, ciphertext, tag, aad
@@ -332,7 +350,7 @@ def run_platform(log_enabled: bool = False, interactive: bool = True) -> None:
             except Exception as e:
                 _log(log_mode[0], f"Error processing web removal: {e}")
             return
-        # --- Comando para AÑADIR desde la web ---
+        # --- COMMAND TO ADD DEVICE VIA WEB ---
         if msg.topic == TOPIC_ADMIN_ADD:
             try:
                 payload = json.loads(msg.payload.decode())
@@ -368,7 +386,7 @@ def run_platform(log_enabled: bool = False, interactive: bool = True) -> None:
                     km.set_session_key(sk, key_id=new_key_id)
                     _log(
                         log_mode[0],
-                        f"KeyManager actualizado con la clave DH para {did!r}, key_id={new_key_id}",
+                        f"KeyManager updated with DH session key for {did!r}, key_id={new_key_id}",
                     )
 
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
