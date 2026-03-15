@@ -108,7 +108,7 @@ The transcript includes device ID and both public keys to ensure freshness and b
 
 ## Changes in Rotation flow
 The modified steps are:
-[...]
+
 4. Platform confirms that it will be prepared to start the DH handshake:
 
 ```json
