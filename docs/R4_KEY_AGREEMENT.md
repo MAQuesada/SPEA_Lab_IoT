@@ -2,8 +2,6 @@
 
 To ensure that session keys used for data encryption are established securely, a key agreement protocol has been implemented between devices and the platform. This prevents any third party from learning the session key, even if they observe MQTT traffic during the handshake. After a device is enrolled, it initiates a Diffie-Hellman handshake with the platform. Once the handshake is complete, both sides independently derive the same `session_key` without ever transmitting it over the network.
 
-Additionally, automatic key rotation has been implemented. Instead of transmitting new keys, the system performs a complete DH handshake periodically to generate new session keys, limiting the impact of key compromise.
-
 ---
 
 ## Library
@@ -21,6 +19,8 @@ The system supports two key agreement algorithms:
 * **Elliptic Curve Diffie-Hellman (ecdh_ephemeral).** Uses the modern X25519 elliptic curve for key agreement. This algorithm generates 256-bit ephemeral keys and is significantly faster (<1 second) than classic DH while providing equivalent security. The shared secret is derived through elliptic curve point multiplication, followed by HKDF-SHA256 to produce the `session_key`.
 
 Both algorithms include HMAC-SHA256 authentication of the handshake transcript to prevent Man-in-the-Middle attacks, even when the MQTT broker is untrusted.
+
+On keyboard devices, the user chooses the key agreement algorithm between `ecdh_ephemeral` or `auth_dh` after selecting the encryption algorithm. However, on screen devices, the algorithm is chosen randomly.
 
 #### Summary
 | Algorithm | Type | Key Size | Speed | Recommended |
@@ -106,63 +106,12 @@ The transcript includes device ID and both public keys to ensure freshness and b
 
 ---
 
-## Automatic Key Rotation
-
-### Purpose
-
-Key rotation periodically renews the session key to limit the exposure window if a key is compromised. Instead of transmitting a new key, the system performs a complete DH handshake to generate a fresh session key.
-
-### Implementation
-
-The `KeyRotationManager` class manages automatic rotation:
-```python
-from spea_lab_iot.key_agreement import KeyRotationManager
-
-# Create rotation manager with 5-minute interval
-rotation_mgr = KeyRotationManager(rotation_interval_seconds=300)
-
-# Define what happens during rotation
-def perform_rotation():
-    # Generate new KeyAgreement instances
-    new_ka_device = KeyAgreement.create("ecdh_ephemeral", pin)
-    new_ka_platform = KeyAgreement.create("ecdh_ephemeral", pin)
-    
-    # Exchange new public keys via MQTT
-    new_device_pub = new_ka_device.public_key_bytes()
-    new_platform_pub = new_ka_platform.public_key_bytes()
-    
-    # Both compute new session key
-    new_session_key = new_ka_device.derive_session_key(new_platform_pub)
-    
-    # Update session key in the system
-
-# Start automatic rotation
-rotation_mgr.start_automatic_rotation(perform_rotation)
-```
-
-### How It Works
-
-The rotation manager uses a background timer thread that triggers periodically:
-
-1. Timer expires (e.g., after 5 minutes)
-2. Rotation callback is invoked
-3. Both device and platform generate new ephemeral key pairs
-4. New public keys are exchanged via MQTT
-5. Both sides compute new shared secret and derive new session key
-6. Old session key is discarded
-7. Timer is reset for the next rotation
-
-This process ensures the session key is never transmitted over the network, even during rotation.
-
-### Security Benefits
-
-| Scenario | Impact |
-|----------|--------|
-| Key compromised at 8:05 AM | Only 5 minutes of data at risk (until 8:10 rotation) |
-| Device connected for 10 hours | Uses 120 different session keys |
-| Attacker records all traffic | Cannot decrypt past sessions (forward secrecy) |
-
----
+## New MQTT topics
+| Topic | Publisher | Subscriber | Purpose |
+|-------|-----------|------------|---------|
+| `iot/dh/init` | Device | Server | Initiates the handshake, sends device public key |
+| `iot/dh/response` | Server | Device | Sends platform public key and HMAC transcript |
+| `iot/dh/finish` | Device | Server | Confirms handshake, sends device HMAC transcript |
 
 ## Testing
 
@@ -177,11 +126,10 @@ python test_r4.py
 2. **Classic DH Handshake Test** - Verifies that device and platform derive identical session keys using RFC 3526 DH
 3. **MitM Detection Test** - Ensures handshake fails when one side uses wrong PIN (HMAC verification catches this)
 4. **Invalid Algorithm Test** - Validates proper error handling for unsupported algorithms
-5. **Automatic Rotation Test** - Verifies that rotation performs complete DH handshakes periodically and generates unique session keys
 
 Expected output:
 ```
-5/5 tests passed
+4/4 tests passed
 🎉 All R4 tests pass!
 ```
 
@@ -201,12 +149,8 @@ src/spea_lab_iot/key_agreement.py
 │   └── Uses RFC 3526 2048-bit MODP group 14
 │
 ├── _ECDHKeyAgreement (modern ECDH implementation)
-│   └── Uses X25519 elliptic curve
-│
-└── KeyRotationManager (automatic rotation)
-    ├── start_automatic_rotation(callback) - Start timer
-    ├── stop_automatic_rotation() - Stop timer
-    └── get_rotation_stats() - Get timing information
+    └── Uses X25519 elliptic curve
+
 
 test_r4.py
 └── Comprehensive test suite (5 tests)

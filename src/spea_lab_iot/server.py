@@ -235,7 +235,6 @@ def run_platform(log_enabled: bool = False, interactive: bool = True) -> None:
             _log(log_mode[0], f"Invalid rekey signature from {device_id}")
             return
 
-        # R4: Acknowledge rotation request
         # The new session key will be set when dh_handler.on_dh_finish() is called
         new_id = km.session_key_id + 1
 
@@ -245,7 +244,7 @@ def run_platform(log_enabled: bool = False, interactive: bool = True) -> None:
             "key_id": new_id,
         }
         client.publish(TOPIC_REKEY_RESPONSE, json.dumps(response), qos=1)
-        _log(log_mode[0], f"Rotation acknowledged for {device_id}. Waiting for DH handshake...")
+        _log(log_mode[0], f"Necesidad de rotacion conocida por {device_id}. Esperando a DH handshake...")
 
     def on_data_message(
         client: mqtt.Client, userdata: object, msg: mqtt.MQTTMessage
@@ -369,7 +368,7 @@ def run_platform(log_enabled: bool = False, interactive: bool = True) -> None:
                     km.set_session_key(sk, key_id=new_key_id)
                     _log(
                         log_mode[0],
-                        f"KeyManager updated with DH session key for {did!r}, key_id={new_key_id}",
+                        f"KeyManager actualizado con la clave DH para {did!r}, key_id={new_key_id}",
                     )
 
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)

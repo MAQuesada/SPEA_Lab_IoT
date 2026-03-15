@@ -8,7 +8,7 @@ print("=== TEST ROTATION DH ===\n")
 pin = "1234"
 algorithm = "ecdh_ephemeral"
 
-# Simuler une rotation : refaire un handshake DH
+# Simulate a rotation : rehacer un DH handshake
 print("🔄 Simulation rotation #1")
 ka1_device = KeyAgreement.create(algorithm, pin)
 ka1_platform = KeyAgreement.create(algorithm, pin)
@@ -23,7 +23,7 @@ print(f"   Session key: {key1_device.hex()[:16]}...")
 assert key1_device == key1_platform
 print("   ✅ Rotation 1 OK\n")
 
-# Simuler rotation #2
+# Simulate rotation #2
 print("🔄 Simulation rotation #2")
 ka2_device = KeyAgreement.create(algorithm, pin)
 ka2_platform = KeyAgreement.create(algorithm, pin)
@@ -38,8 +38,8 @@ print(f"   Session key: {key2_device.hex()[:16]}...")
 assert key2_device == key2_platform
 print("   ✅ Rotation 2 OK\n")
 
-# Vérifier que les clés sont différentes
+# Verify the keys are differents
 assert key1_device != key2_device
-print("✅ Les clés de rotation sont différentes (preuve que DH fonctionne)\n")
+print("✅ Las claves de rotación son diferentes (prueba de que DH funciona).\n")
 
-print("🎉 Test de rotation DH réussi !")
+print("🎉 ¡Prueba de rotación con DH superada!")

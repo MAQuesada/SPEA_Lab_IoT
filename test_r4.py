@@ -207,85 +207,6 @@ def test_invalid_algorithm():
         return True
 
 
-# ---------------------------------------------------------------------------
-# Test 5 — Automatic Key Rotation with DH handshake
-# ---------------------------------------------------------------------------
-def test_key_rotation():
-    separator("TEST 5: Automatic Key Rotation with DH")
-    
-    import time
-    from spea_lab_iot.key_agreement import KeyRotationManager
-    
-    pin = "platform-pin"
-    algorithm = "ecdh_ephemeral"
-    rotation_count = [0]
-    session_keys = []
-    
-    def perform_rotation():
-        """Perform a complete DH handshake for rotation"""
-        rotation_count[0] += 1
-        print(f"\n🔄 Rotation #{rotation_count[0]}")
-        
-        # Simulate device and platform performing new DH handshake
-        ka_device = KeyAgreement.create(algorithm, pin)
-        ka_platform = KeyAgreement.create(algorithm, pin)
-        
-        pub_device = ka_device.public_key_bytes()
-        pub_platform = ka_platform.public_key_bytes()
-        
-        # Both derive new session key
-        sk_device = ka_device.derive_session_key(pub_platform)
-        sk_platform = ka_platform.derive_session_key(pub_device)
-        
-        # Verify they match
-        if sk_device != sk_platform:
-            print(f"   ❌ Session keys don't match!")
-            return
-        
-        session_keys.append(sk_device)
-        print(f"   ✓ New key: {sk_device.hex()[:16]}...")
-        
-        # Verify HMAC authentication
-        transcript = [b"sensor-test", pub_device, pub_platform]
-        hmac_device = ka_device.make_transcript_hmac(transcript)
-        hmac_platform = ka_platform.make_transcript_hmac(transcript)
-        
-        if hmac_device == hmac_platform:
-            print(f"   ✓ HMAC authenticated")
-    
-    # Create rotation manager (rotate every 3 seconds for testing)
-    print("[Test] Creating rotation manager (3s interval)...")
-    rotation_mgr = KeyRotationManager(rotation_interval_seconds=3)
-    
-    # Start automatic rotation
-    rotation_mgr.start_automatic_rotation(perform_rotation)
-    
-    print("[Test] Running for 10 seconds (expecting 3 rotations)...\n")
-    
-    # Run for 10 seconds
-    time.sleep(10)
-    
-    # Stop rotation
-    rotation_mgr.stop_automatic_rotation()
-    
-    print(f"\n[Test] Total rotations performed: {rotation_count[0]}")
-    
-    # Verify results
-    if rotation_count[0] < 3:
-        print(f"\n❌ FAILED — Expected at least 3 rotations, got {rotation_count[0]}")
-        return False
-    
-    # Verify all session keys are different (proof of rotation)
-    if len(set(k.hex() for k in session_keys)) != len(session_keys):
-        print(f"\n❌ FAILED — Some session keys are identical")
-        return False
-    
-    print(f"\n✅ SUCCESS — Key rotation works!")
-    print(f"   ✓ {rotation_count[0]} rotations performed")
-    print(f"   ✓ All session keys unique")
-    print(f"   ✓ Each rotation used DH handshake")
-    return True
-
 
 # ---------------------------------------------------------------------------
 # Main
@@ -296,7 +217,6 @@ if __name__ == "__main__":
         test_dh_success(),
         test_mitm_detection(),
         test_invalid_algorithm(),
-        test_key_rotation(),
     ]
 
     separator("SUMMARY")
