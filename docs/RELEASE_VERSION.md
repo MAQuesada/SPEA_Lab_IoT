@@ -6,12 +6,13 @@ This project implements a secure, end-to-end IoT infrastructure using MQTT. It s
 
 ## System Architecture
 
-The ecosystem consists of four main orchestrated modules running concurrently:
+The ecosystem consists of five main orchestrated modules running concurrently:
 
 - `server.py` — Acts as the security Gateway and central authority. Manages the allowed devices whitelist, negotiates cryptographic keys, and decrypts valid telemetry to relay it to secure channels.
 - `dashboard.py` — A command center built with Streamlit. Allows visual administration of the device lifecycle (adding/removing sensors) and monitors decrypted telemetry in real-time time-series charts.
-- `device.py` — The core, headless IoT engine. Manages MQTT connections, cryptography (R4, R5), and self-healing resilience independently from the UI.
+- `device.py` — The core, headless IoT engine. Manages MQTT connections, cryptography (R2-R3, R4, R5), and self-healing resilience independently from the UI.
 - `device_keypad.py` & `device_screen.py` — "Immortal" UI terminals. They handle user inputs, auto-discover IDs from PINs, and stay alive even if the platform revokes their access, acting as the "steering wheel" for the engine.
+- `device_no_ui.py` — Device with no user interface. Since the information is not displayed to the user, it uses a default ID, encryption algorithm, and key agreement algorithm, along with the platform's PIN for connection. This device is automatically added to the platform due to its special conditions.
 - `device_menu.py` — A unified interactive launcher to easily spawn additional Keypad or Screen devices on demand.
 
 ---
@@ -19,7 +20,7 @@ The ecosystem consists of four main orchestrated modules running concurrently:
 ## Security Requirements & Implementation
 
 ### R1: Device Enrollment and Access Control
-No device can publish data without prior authorization. The platform maintains a dictionary of allowed devices. Devices pair using `action: "pairing"` and a PIN.
+The only device which can publish data without prior authorization is the No UI mode. The rest can't publish data without prior authorization. The platform maintains a dictionary of allowed devices. Devices pair using `action: "pairing"` and a PIN.
 - **Keypad Mode**: The user enters the platform's default PIN into the device console to pair.
 - **Screen Mode**: The device generates a random 6-digit PIN at startup. The administrator must approve this device by entering the PIN and preferred encryption algorithm into the Web Dashboard.
 
@@ -45,8 +46,8 @@ Original payloads are encrypted before being published to `iot/data`.
 
 | Encryption Algorithm | Type | Keys Used |
 |----------------------|------|-----------|
-| **`AES-CBC`** | Authenticated Encryption (AE) | Split: `session_key` (encrypt) and `auth_key` (MAC) |
-| **`AES-GCM`** | AEAD | Full `session_key` (incorporates `device_id` and `timestamp` as AAD) |
+| **`AES-CBC`** | Authenticated Encryption (AE) | Split: `enc_key` (encrypt) and `mac_key` (MAC) |
+| **`AES-GCM`** | AEAD | Full `session_key` (incorporates `device_id`, `timestamp` and `key_id` as AAD) |
 
 ---
 
@@ -56,12 +57,12 @@ This project includes an orchestrator script that boots the entire ecosystem sim
 
 ### Step 1: Install dependencies
 
-From the project root:s
+From the project root:
 
 ```bash
 uv sync
 ```
 ## Step 2: Run the master launcher
 ```bash
-python start_lab.py
+uv run python -m start_lab.py
 ```

@@ -106,6 +106,22 @@ The transcript includes device ID and both public keys to ensure freshness and b
 
 ---
 
+## Changes in Rotation flow
+The modified steps are:
+[...]
+4. Platform confirms that it will be prepared to start the DH handshake:
+
+```json
+{
+    "device_id": "sensor1",
+    "key_id": 2,
+}
+```
+
+5. Device receives the response on `iot/rekey/response`, the DH handshake starts by calling `run_dh_handshake(client,device_id,pin,algorithm)`, and calls `key_mgr.set_session_key(new_key, key_id)` using the previous `key_id` on payload.
+
+---
+
 ## New MQTT topics
 | Topic | Publisher | Subscriber | Purpose |
 |-------|-----------|------------|---------|
@@ -153,7 +169,7 @@ src/spea_lab_iot/key_agreement.py
 
 
 test_r4.py
-└── Comprehensive test suite (5 tests)
+└── Comprehensive test suite (4 tests)
 ```
 
 ---

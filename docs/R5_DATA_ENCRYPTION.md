@@ -12,15 +12,15 @@ To implement the encryption process, the `PyCryptodome` library has been used, a
 
 ## Types of Encryption
 
-* **Authenticated Encryption (AE): AES-CBC.** This focuses only on encrypting the original payload with the `session_key`, and then authenticating that ciphertext using `auth_key` as the MAC. Specifically, the chosen algorithm is **AES_CBC_HMAC**. The decryption process occurs in a similar but reverse manner: first verifying that the result is correct, and then decrypting. 
+* **Authenticated Encryption (AE): AES-CBC.** This focuses only on encrypting the original payload with the `enc_key`, and then authenticating that ciphertext using `mac_key` as the MAC. Both of the keys are obtained splitting `session_key`. Specifically, the chosen algorithm is **AES_CBC_HMAC**. The decryption process occurs in a similar but reverse manner: first verifying that the result is correct, and then decrypting. 
 
-* **Authenticated Encryption with Associated Data (AEAD): AES-GCM.** This adds device-related metadata to the encryption mechanism. The metadata includes `device_id` and `timestamp`. The data is then encrypted using only the `session_key`. The decryption process works similarly but in reverse, incorporating the metadata into the encryption mechanism and decrypting based on it.
+* **Authenticated Encryption with Associated Data (AEAD): AES-GCM.** This adds device-related metadata to the encryption mechanism. The metadata includes `device_id`, `timestamp` and `key_id`. The data is then encrypted using only the `session_key`. The decryption process works similarly but in reverse, incorporating the metadata into the encryption mechanism and decrypting based on it.
 
 #### Summary
-| Cryptographic Algorithms | Type of Encryption | Keys |
+| Cryptographic Algorithms | Type of Encryption | Keys | 
 |--------------------------|--------------------|------|
-| `AES-CBC` | AE | `auth_key` and `session_key` | 
-| `AES-GCM` | AEAD | `session_key` |
+| `AES-CBC` | AE | `mac_key` (16 bytes) and `enc_key` (16 bytes) | 
+| `AES-GCM` | AEAD | `session_key` (32 bytes) |
 
 ---
 
@@ -30,7 +30,7 @@ To implement the encryption process, the `PyCryptodome` library has been used, a
 
 #### Step 1a: Keypad device
 
-After entering the **platform default PIN**, enter the desired encryption algorithm. You can choose between `AES-CBC` or `AES-CBC`. The device pairs once. 
+After entering the **platform default PIN**, enter the desired encryption algorithm. You can choose between `AES-CBC` or `AES-GCM`. The device pairs once. 
 
 #### Step 1b: Screen device
 
@@ -42,11 +42,11 @@ After entering the **platform default PIN**, enter the desired encryption algori
    - PIN: the 6-digit value shown on the device (e.g. `483921`).
    - **Algorithm (new implementation)**: the encryption algorithm (e.g. `AES-CBC`)
 
-   The device’s next pairing attempt will succeed
+   The device’s next pairing attempt will succeed only if the encryption algorithm, pin and device id are the same in the platform and the sensor.
 
 ### Step 2: Publish encrypted data by device
 
-When the payload is created as a JSON, it is transformed into plain text. In addition, the metadata (`timestamp` and `aad`) is generated. Then, according to the previously determined encryption algorithm, that plaintext is encrypted.
+When the payload is created as a JSON, it is transformed into plain text. In addition, the `timestamp` and `aad` are generated. Then, according to the previously determined encryption algorithm, that plaintext is encrypted.
 
 Finally, the following JSON is published to `iot/data`:
 ```
