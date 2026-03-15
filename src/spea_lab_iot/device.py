@@ -121,6 +121,9 @@ def run_device(
         key_mgr.load_keys() 
         key_mgr.derive_master_key(current_pin)
 
+        # Lock to prevent multiple simultaneous rotations
+        rotation_lock = threading.Lock()
+
         enrolled_event = threading.Event()
         revoked_event = threading.Event() 
         data_topic_ref: list[str | None] = [None]
@@ -148,18 +151,33 @@ def run_device(
                     if payload.get("device_id") != sensor_id: 
                         return
                     
-                    # R4: Instead of receiving encrypted key, perform new DH handshake
-                    print(f"🔄 Starting DH handshake for key rotation...")
-                    new_session_key, new_auth_key = run_dh_handshake(
-                        client=client,
-                        device_id=sensor_id,
-                        pin=current_pin,
-                        algorithm=current_ka
-                    )
+                    # R4: Launch DH handshake in separate thread with lock to prevent multiple simultaneous rotations
+                    def perform_dh_rotation():
+                        # Acquire lock to ensure only one rotation at a time
+                        if not rotation_lock.acquire(blocking=False):
+                            print("⚠️  Rotation already in progress, skipping...")
+                            return
+                        
+                        try:
+                            print(f"🔄 Starting DH handshake for key rotation...")
+                            new_session_key, new_auth_key = run_dh_handshake(
+                                client=client,
+                                device_id=sensor_id,
+                                pin=current_pin,
+                                algorithm=current_ka
+                            )
+                            
+                            new_key_id = payload.get("key_id", key_mgr.session_key_id + 1)
+                            key_mgr.set_session_key(new_session_key, new_key_id)
+                            print(f"✅ Key rotation via DH successful. New Key ID: {new_key_id}")
+                        except Exception as e:
+                            print(f"Error during DH rotation: {e}")
+                        finally:
+                            rotation_lock.release()
                     
-                    new_key_id = payload.get("key_id", key_mgr.session_key_id + 1)
-                    key_mgr.set_session_key(new_session_key, new_key_id)
-                    print(f"✅ Key rotation via DH successful. New Key ID: {new_key_id}")
+                    # Start DH handshake in background thread
+                    rotation_thread = threading.Thread(target=perform_dh_rotation, daemon=True)
+                    rotation_thread.start()
                     
                 except Exception as e:
                     print(f"Error handling rekey response: {e}")
