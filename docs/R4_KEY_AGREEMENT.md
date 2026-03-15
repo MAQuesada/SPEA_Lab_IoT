@@ -1,4 +1,4 @@
-# R4: Key Agreement with Automatic Rotation
+# R4: Key Agreement
 
 To ensure that session keys used for data encryption are established securely, a key agreement protocol has been implemented between devices and the platform. This prevents any third party from learning the session key, even if they observe MQTT traffic during the handshake. After a device is enrolled, it initiates a Diffie-Hellman handshake with the platform. Once the handshake is complete, both sides independently derive the same `session_key` without ever transmitting it over the network.
 
@@ -148,7 +148,7 @@ src/spea_lab_iot/key_agreement.py
 ├── _DHKeyAgreement (classic DH implementation)
 │   └── Uses RFC 3526 2048-bit MODP group 14
 │
-├── _ECDHKeyAgreement (modern ECDH implementation)
+└── _ECDHKeyAgreement (modern ECDH implementation)
     └── Uses X25519 elliptic curve
 
 
