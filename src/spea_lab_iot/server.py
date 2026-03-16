@@ -347,7 +347,6 @@ def run_platform(log_enabled: bool = False, interactive: bool = True) -> None:
                     session_keys.pop(did, None)
                     auth_keys.pop(did, None)
                     device_managers.pop(did, None)
-                    print("Choice [1-5]: ", end="", flush=True) 
             except Exception as e:
                 _log(log_mode[0], f"Error processing web removal: {e}")
             return
