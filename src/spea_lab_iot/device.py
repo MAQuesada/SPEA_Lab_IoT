@@ -50,6 +50,7 @@ ENROLL_WAIT_TIMEOUT_SEC = 30
 POS_ALG = ["AES-CBC", "AES-GCM"]
 POS_DH = ["ecdh_ephemeral", "auth_dh"]
 
+# ------------------- FUNCTIONS RELATED TO SIMULATED DATA----------------------
 def _read_temperature() -> float:
     value = BASELINE_TEMPERATURE_C + random.uniform(-TEMPERATURE_DEVIATION, TEMPERATURE_DEVIATION)
     return round(max(TEMP_MIN, min(TEMP_MAX, value)), 1)
@@ -58,6 +59,7 @@ def _read_humidity() -> float:
     value = BASELINE_HUMIDITY_PCT + random.uniform(-HUMIDITY_DEVIATION, HUMIDITY_DEVIATION)
     return round(max(HUMIDITY_MIN, min(HUMIDITY_MAX, value)), 1)
 
+# ------------------- FUNCTIONS RELATED TO CRYPTOGRAPHIC----------------------
 def encrypt_aead_aes_gcm(key: bytes, plaintext: bytes, aad: bytes):
     cipher = AES.new(key, AES.MODE_GCM)
     cipher.update(aad)
@@ -72,6 +74,7 @@ def encrypt_aes_cbc_hmac(enc_key: bytes, mac_key: bytes, plaintext: bytes):
     h.update(iv + ciphertext)
     tag = h.digest()
     return iv, ciphertext, tag
+# ----------------------------------------------------------------------------
 
 def run_device(
     sensor_id: str,
@@ -98,24 +101,31 @@ def run_device(
         if ui_mode == "keypad":
             # The launcher already provides the data. If missing, it means we have been revoked.
             if not current_pin or not current_alg or not current_ka:
-                print(f"\n🔌 [{sensor_id}] Conexión finalizada permanentemente.")
-                print("👉 Vuelve a ejecutar la terminal del Keypad para iniciar otra sesión.")
+                print(f"\n🔌 [{sensor_id}] Connection permanently terminated.")
+                print("👉 Re-run the Keypad terminal to start another session.")
                 break
                 
         elif ui_mode == "screen":
             # If there are no credentials (startup or revocation), the engine auto-generates the PIN
             if not current_pin or not current_alg or not current_ka:
-                print("\n🔄 Generando nuevo PIN de conexión seguro...")
+                print("\n🔄 Generating a new secure connection PIN...")
                 current_pin = str(random.randint(100000, 999999))
                 current_alg = random.choice(POS_ALG)
                 current_ka = random.choice(POS_DH)
                 
-            print(f"\n=================================")
-            print(f"📱 MODO SCREEN - ID: {sensor_id}")
-            print(f"🔑 NUEVO PIN: {current_pin}")
-            print(f"🔒 Algoritmo Cifrado: {current_alg}")
-            print(f"=================================")
-            print("⏳ Intentando conectar con la Plataforma ...")
+            print("\n=================================")
+            print(f"📱 SCREEN MODE - ID: {sensor_id}")
+            print(f"🔑 NEW PIN: {current_pin}")
+            print(f"🔒 ENCRYPTION ALGORITHM: {current_alg}")
+            print("=================================")
+            print(f"🔄 Key agreenment algorithm --> {current_ka}")
+            print("⏳ Trying to connect to the Platform...")
+        else:
+            if not current_pin or not current_alg or not current_ka:
+                print(f"\n🔌 [{sensor_id}] ERROR -> You need to specify the PIN, the encryption algorithm, and the DH")
+                print("👉 Re-run the Keypad terminal to start another session.")
+                break
+            
 
         key_mgr = KeyManager(sensor_id)
         key_mgr.load_keys() 
@@ -139,7 +149,7 @@ def run_device(
                 try:
                     payload = json.loads(msg.payload.decode())
                     if payload.get("device_id") == sensor_id:
-                        print("\n[!] ALERTA: La plataforma ha eliminado este dispositivo.")
+                        print("\n[!] ALERT: This device has been removed from the platform.")
                         revoked_event.set()
                 except Exception:
                     pass
@@ -155,23 +165,23 @@ def run_device(
                     def perform_dh_rotation():
                         # Acquire lock to ensure only one rotation at a time
                         if not rotation_lock.acquire(blocking=False):
-                            print("⚠️  Rotacion en progreso, saltando...")
+                            print("⚠️  Rotation already in progress, skipping...")
                             return
                         
                         try:
-                            print(f"🔄 Comenzando DH handshake para la rotación de claves...")
-                            new_session_key, new_auth_key = run_dh_handshake(
+                            print("🔄 Starting DH handshake for key rotation...")
+                            new_session_key, _ = run_dh_handshake(
                                 client=client,
                                 device_id=sensor_id,
                                 pin=current_pin,
                                 algorithm=current_ka
                             )
                             
-                            new_key_id = payload.get("key_id", key_mgr.session_key_id + 1)
+                            new_key_id = payload.get("key_id", key_mgr.session_key_id)
                             key_mgr.set_session_key(new_session_key, new_key_id)
-                            print(f"✅ Rotación de claves mediante DH exitosa. Nueva Key ID: {new_key_id}")
+                            print(f"✅ Key rotation via DH successful. New Key ID: {new_key_id}")
                         except Exception as e:
-                            print(f"Error durante rotación DH: {e}")
+                            print(f"Error during DH rotation: {e}")
                         finally:
                             rotation_lock.release()
                     
@@ -213,8 +223,8 @@ def run_device(
         if ui_mode == "keypad":
             send_pairing()
             if not enrolled_event.wait(timeout=5):
-                print("\n❌ ERROR: Acceso denegado o credenciales inválidas.")
-                print("👉 Verifica los datos en el Dashboard Web e inténtalo de nuevo.\n")
+                print("\n❌ ERROR: Access denied or invalid credentials.")
+                print("👉 Check the data on the Web Dashboard and try again.\n")
                 client.loop_stop()
                 client.disconnect()
                 pin, alg, ka_algorithm = None, None, None
@@ -233,7 +243,7 @@ def run_device(
         # 3. KEY EXCHANGE AND DATA TRANSMISSION
         print(f"Enrolled. Starting DH key agreement (algorithm={current_ka})...")
         try:
-            session_key, auth_key = run_dh_handshake(
+            session_key, _ = run_dh_handshake(
                 client=client, device_id=sensor_id, pin=current_pin, algorithm=current_ka
             )
         except RuntimeError as e:
@@ -255,8 +265,8 @@ def run_device(
             # --- KEY ROTATION ZONE ---
             if key_mgr.check_rotation_needed():
                 if rekey_attempts >= 3:
-                    print("\n[!] ALERTA: La plataforma no responde.")
-                    print("Asumiendo que el dispositivo ha sido ELIMINADO de la red.")
+                    print("\n[!] ALERT: The platform is not responding.")
+                    print("Assuming the device has been REMOVED from the network.")
                     revoked_event.set()
                     continue
 
@@ -268,7 +278,7 @@ def run_device(
                 payload_dict["sig"] = base64.b64encode(h.digest()).decode()
 
                 client.publish(TOPIC_REKEY, json.dumps(payload_dict), qos=1)
-                print(f"🔄 Invoked key rotation... (Intento {rekey_attempts + 1}/3)")
+                print(f"🔄 Invoked key rotation... (Attempt {rekey_attempts + 1}/3)")
                 rekey_attempts += 1
                 
                 # Wait 5 seconds for the platform to respond before retrying
@@ -290,15 +300,15 @@ def run_device(
 
             plaintext = json.dumps(payload).encode()
             timestamp = str(int(time.time()))
-            aad = (sensor_id + "|" + timestamp).encode()
 
             try:
                 session_key_bytes, key_id = key_mgr.get_session_key()
+                aad = (sensor_id + "|" + timestamp + "|" + str(key_id)).encode()
 
                 if current_alg == "AES-CBC":
                     enc_key = session_key_bytes[:16]
-                    auth_key = session_key_bytes[16:]
-                    nonce, ciphertext, tag = encrypt_aes_cbc_hmac(enc_key, auth_key, plaintext)
+                    mac_key = session_key_bytes[16:]
+                    nonce, ciphertext, tag = encrypt_aes_cbc_hmac(enc_key, mac_key, plaintext)
                     
                 elif current_alg == "AES-GCM":
                     nonce, ciphertext, tag = encrypt_aead_aes_gcm(session_key_bytes, plaintext, aad)
@@ -330,7 +340,7 @@ def run_device(
         # IF DELETED OR BY TIMEOUT
         if revoked_event.is_set():
             print("\n===========================================")
-            print("🔌 CONEXIÓN CERRADA POR LA PLATAFORMA.")
+            print("🔌 CONNECTION CLOSED BY THE PLATFORM.")
             print("===========================================\n")
             break # <--- Exit the engine and return control to the launcher
 

@@ -30,17 +30,17 @@ def on_connect(
     properties: object | None = None,
 ) -> None:
     if reason_code == 0:
-        print(f"Conectado al broker {MQTT_BROKER_HOST}")
+        print(f"Connected to the broker {MQTT_BROKER_HOST}")
         # Subscribe to both channels
         client.subscribe(TOPIC_FEED, qos=1)
         client.subscribe(TOPIC_DATA, qos=1)
         
-        print(f"🎧 Suscrito al canal público (RAW Cifrado): '{TOPIC_DATA}'")
-        print(f"✅ Suscrito al canal privado (Feed Descifrado): '{TOPIC_FEED}'")
-        print("(Ctrl+C para detener)\n")
+        print(f"🎧 Subscribed to the public channel (Encrypted RAW): '{TOPIC_DATA}'")
+        print(f"✅ Subscribed to the private channel (Decrypted Feed): '{TOPIC_FEED}'")
+        print("(Ctrl+C to stop)\n")
         print("-" * 70)
     else:
-        print(f"Error de conexión: {reason_code}", file=sys.stderr)
+        print(f"Connection error: {reason_code}", file=sys.stderr)
 
 
 def on_message(client: mqtt.Client, userdata: object, msg: mqtt.MQTTMessage) -> None:
@@ -58,12 +58,12 @@ def on_message(client: mqtt.Client, userdata: object, msg: mqtt.MQTTMessage) -> 
             temp = payload.get("temperature", "?")
             humidity = payload.get("humidity", "?")
             print(
-                f"🟢 [iot/feed DESCIFRADO] -> dispositivo={device_id!r}, temperatura={temp}°C, humedad={humidity}%"
+                f"🟢 [iot/feed DECODED] -> device={device_id!r}, temperature={temp}°C, humidity={humidity}%"
             )
             print("-" * 70)
             
     except (json.JSONDecodeError, UnicodeDecodeError) as e:
-        print(f"Recibido (raw): {msg.payload!r} (error de parseo: {e})")
+        print(f"Received (raw): {msg.payload!r} (parsing error: {e})")
 
 
 def main() -> None:
@@ -75,7 +75,7 @@ def main() -> None:
     try:
         client.connect(MQTT_BROKER_HOST, MQTT_BROKER_PORT, keepalive=60)
     except Exception as e:
-        print(f"No se pudo conectar: {e}", file=sys.stderr)
+        print(f"Unable to connect: {e}", file=sys.stderr)
         sys.exit(1)
 
     client.loop_forever()
